@@ -86,7 +86,15 @@ def get_notification_summary(
             detail="Database connection not available",
         )
 
-    return NotificationService.get_summary(db=db)
+    try:
+        return NotificationService.get_summary(db=db)
+    except Exception as exc:
+        from app.db.session import sanitize_db_error
+        clean_err = sanitize_db_error(str(exc))
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database query failed: {clean_err}",
+        )
 
 
 @router.post(

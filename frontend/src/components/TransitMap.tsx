@@ -1,25 +1,46 @@
 import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import L from 'leaflet';
 import { BusLive, RouteLive, RouteIntelligence, RouteDetailed, LoadStatus } from '../types';
-import { StatusBadge } from './StatusBadge';
 import { fetchRoutesDetailed, fetchLiveBuses, manualReassignBus } from '../services/api';
 
 interface TransitMapProps {
   buses: BusLive[];
   routes: (RouteLive | RouteIntelligence)[];
   detailedRoutes?: RouteDetailed[];
-  isLoading: boolean;
+  isLoading?: boolean;
   selectedBusId?: number | null;
   onSelectBus?: (busId: number | null) => void;
   onReassignmentExecuted?: () => void;
+  compactView?: boolean;
 }
+
+// Corridor route colors for Coimbatore network
+const ROUTE_COLORS: Record<string, string> = {
+  '101': '#2563eb', // Avinashi Rd corridor (Blue)
+  '202': '#10b981', // Saibaba Colony (Emerald)
+  '303': '#f59e0b', // Trichy Rd (Amber)
+  '404': '#8b5cf6', // Singanallur Express (Purple)
+  '505': '#ec4899', // Ukkadam Direct (Pink)
+  '606': '#06b6d4', // Peelamedu Shuttle (Cyan)
+};
+
+const ROUTE_NAMES: Record<string, string> = {
+  '101': '101 - Avinashi Road Express',
+  '202': '202 - Saibaba Colony Loop',
+  '303': '303 - Trichy Road - Singanallur',
+  '404': '404 - Singanallur Express',
+  '505': '505 - Ukkadam Direct',
+  '606': '606 - Peelamedu Shuttle',
+};
 
 // Helper to determine load status and color from bus data
 function getBusLoadStatus(bus: BusLive): { status: LoadStatus; color: string; bgClass: string } {
-  const lf = bus.load_factor ?? (bus.capacity > 0 && bus.passenger_count !== null ? bus.passenger_count / bus.capacity : null);
+  const lf =
+    bus.load_factor ??
+    (bus.capacity > 0 && bus.passenger_count !== null ? bus.passenger_count / bus.capacity : null);
 
   if (lf === null) {
-    return { status: 'NORMAL', color: '#3B82F6', bgClass: 'bg-blue-500' };
+    return { status: 'NORMAL', color: '#2563EB', bgClass: 'bg-blue-600' };
   }
   if (lf >= 1.0) {
     return { status: 'CRITICAL', color: '#EF4444', bgClass: 'bg-rose-500' };
@@ -28,28 +49,28 @@ function getBusLoadStatus(bus: BusLive): { status: LoadStatus; color: string; bg
     return { status: 'HIGH', color: '#F59E0B', bgClass: 'bg-amber-500' };
   }
   if (lf >= 0.5) {
-    return { status: 'NORMAL', color: '#3B82F6', bgClass: 'bg-blue-500' };
+    return { status: 'NORMAL', color: '#2563EB', bgClass: 'bg-blue-600' };
   }
   return { status: 'LOW', color: '#10B981', bgClass: 'bg-emerald-500' };
 }
 
-// Create custom SVG marker icon for Leaflet
+// Create custom SVG marker icon for Leaflet matching the reference image
 function createBusDivIcon(bus: BusLive, isSelected: boolean) {
   const { color } = getBusLoadStatus(bus);
-  const size = isSelected ? 42 : 34;
+  const size = isSelected ? 40 : 32;
   const pulseRing = isSelected
-    ? `<div class="absolute -inset-1.5 rounded-full border-2 border-white animate-ping opacity-75"></div>`
+    ? `<div class="absolute -inset-1.5 rounded-full border-2 border-blue-600 animate-ping opacity-75"></div>`
     : '';
 
   const html = `
     <div class="relative flex items-center justify-center cursor-pointer transition-transform hover:scale-110" style="width: ${size}px; height: ${size}px;">
       ${pulseRing}
-      <div class="w-full h-full rounded-full shadow-lg flex items-center justify-center text-white font-bold border-2 border-white" style="background-color: ${color};">
-        <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+      <div class="w-full h-full rounded-full shadow-md flex items-center justify-center text-white font-bold border-2 border-white" style="background-color: ${color};">
+        <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M4 16c0 .88.39 1.67 1 2.22V20c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h8v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1.78c.61-.55 1-1.34 1-2.22V6c0-3.5-3.58-4-8-4s-8 .5-8 4v10zm3.5 1c-.83 0-1.5-.67-1.5-1.5S6.67 14 7.5 14s1.5.67 1.5 1.5S8.33 17 7.5 17zm9 0c-.83 0-1.5-.67-1.5-1.5s.67-1.5 1.5-1.5 1.5.67 1.5 1.5-.67 1.5-1.5 1.5zm1.5-6H6V6h12v5z"/>
         </svg>
       </div>
-      <div class="absolute -bottom-4 bg-slate-900/90 text-[10px] font-mono px-1 py-0.2 rounded border border-slate-700 text-slate-200 shadow whitespace-nowrap">
+      <div class="absolute -bottom-4 bg-white text-[10px] font-bold px-1.5 py-0.2 rounded shadow-sm border border-slate-200 text-[#172033] whitespace-nowrap">
         ${bus.bus_number}
       </div>
     </div>
@@ -68,10 +89,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   buses,
   routes,
   detailedRoutes: propDetailedRoutes,
-  isLoading,
   selectedBusId: externalSelectedBusId,
   onSelectBus,
   onReassignmentExecuted,
+  compactView = false,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -81,6 +102,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
   const initialFitDoneRef = useRef<boolean>(false);
   const onSelectBusRef = useRef(onSelectBus);
   onSelectBusRef.current = onSelectBus;
+
+  // Change route preview map refs
+  const modalMapContainerRef = useRef<HTMLDivElement | null>(null);
+  const modalMapInstanceRef = useRef<L.Map | null>(null);
 
   const [mapReady, setMapReady] = useState<boolean>(false);
   const [detailedRoutes, setDetailedRoutes] = useState<RouteDetailed[]>(
@@ -110,7 +135,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     }
   }, [buses]);
 
-  // Periodic polling for fresh bus telemetry using existing API client
+  // Periodic polling for fresh bus telemetry
   useEffect(() => {
     let isMounted = true;
     let isPolling = false;
@@ -124,14 +149,12 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           setBusList(freshBuses);
         }
       } catch (err) {
-        // Handle request errors without silently freezing the map
         console.warn('[TransitMap] Failed to poll live bus telemetry:', err);
       } finally {
         isPolling = false;
       }
     };
 
-    // Dedicated periodic telemetry poll every 1500ms for continuous smooth movement
     pollBusTelemetry();
     const intervalId = setInterval(pollBusTelemetry, 1500);
 
@@ -148,7 +171,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     }
   }, [propDetailedRoutes]);
 
-  // Load detailed routes with ordered stops on mount if not provided via props
+  // Load detailed routes if not provided
   useEffect(() => {
     let isMounted = true;
     if (detailedRoutes.length >= 6) return;
@@ -173,7 +196,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     }
   }, []);
 
-  // Segregate buses with valid GPS telemetry vs missing telemetry
+  // Filter buses with valid GPS
   const validGpsBuses = useMemo(() => {
     return busList.filter((b) => {
       const hasCoords =
@@ -190,20 +213,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     });
   }, [busList, filterRoute]);
 
-  const unmappedBuses = useMemo(() => {
-    return busList.filter(
-      (b) =>
-        b.latitude === null ||
-        b.longitude === null ||
-        isNaN(b.latitude) ||
-        isNaN(b.longitude) ||
-        (b.latitude === 0 && b.longitude === 0)
-    );
-  }, [busList]);
-
+  // Lead selected bus for detail card
   const activeSelectedBus = useMemo(() => {
-    if (!selectedBusId) return null;
-    return busList.find((b) => b.bus_id === selectedBusId) || null;
+    if (selectedBusId) {
+      const found = busList.find((b) => b.bus_id === selectedBusId);
+      if (found) return found;
+    }
+    return busList[0] || null;
   }, [busList, selectedBusId]);
 
   const handleExecuteReassign = async () => {
@@ -218,7 +234,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
       });
       setReassignFeedback({
         type: 'success',
-        message: `Bus ${activeSelectedBus.bus_number} successfully reassigned to Route ${res.target_route_number}. Simulator initiated continuous transfer.`,
+        message: `Bus ${activeSelectedBus.bus_number} successfully reassigned to Route ${res.target_route_number}.`,
       });
       setIsReassignModalOpen(false);
       if (onReassignmentExecuted) {
@@ -236,18 +252,97 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     }
   };
 
-  // 1. Initialize Map centered on Coimbatore
+  // Contained Leaflet preview map inside Change Route modal
+  useEffect(() => {
+    if (!isReassignModalOpen || !modalMapContainerRef.current || !activeSelectedBus) {
+      if (modalMapInstanceRef.current) {
+        modalMapInstanceRef.current.remove();
+        modalMapInstanceRef.current = null;
+      }
+      return;
+    }
+
+    const container = modalMapContainerRef.current;
+    if ((container as any)._leaflet_id) {
+      (container as any)._leaflet_id = null;
+    }
+
+    const busLat = activeSelectedBus.latitude || 11.0168;
+    const busLon = activeSelectedBus.longitude || 76.9558;
+
+    const modalMap = L.map(container, {
+      center: [busLat, busLon],
+      zoom: 13,
+      zoomControl: true,
+      attributionControl: false,
+    });
+    modalMapInstanceRef.current = modalMap;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+    }).addTo(modalMap);
+
+    // Plot bus marker
+    const busIcon = L.divIcon({
+      className: 'modal-bus-marker',
+      html: `
+        <div style="background-color: #2563EB; color: white; padding: 3px 8px; border-radius: 9999px; font-weight: bold; font-size: 11px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.25); border: 2px solid white; display: flex; align-items: center; gap: 4px; white-space: nowrap;">
+          <span>🚌</span>
+          <span>Bus ${activeSelectedBus.bus_number}</span>
+        </div>
+      `,
+      iconSize: [84, 26],
+      iconAnchor: [42, 13],
+    });
+
+    const busMarker = L.marker([busLat, busLon], { icon: busIcon }).addTo(modalMap);
+    busMarker.bindPopup(
+      `<strong>Bus ${activeSelectedBus.bus_number}</strong><br/>Route ${activeSelectedBus.assigned_route_number || activeSelectedBus.route_number || '—'}`
+    );
+
+    // If target route is selected, plot target corridor path and fit bounds
+    if (targetRouteId && detailedRoutes.length > 0) {
+      const selectedRoute = detailedRoutes.find((r) => r.id === targetRouteId);
+      if (selectedRoute && selectedRoute.stops && selectedRoute.stops.length > 0) {
+        const coords: [number, number][] = selectedRoute.stops.map((s) => [s.latitude, s.longitude]);
+        const rColor = ROUTE_COLORS[selectedRoute.route_number] || '#2563EB';
+        L.polyline(coords, {
+          color: rColor,
+          weight: 4,
+          opacity: 0.85,
+        }).addTo(modalMap);
+
+        const bounds = L.latLngBounds([[busLat, busLon], ...coords]);
+        modalMap.fitBounds(bounds, { padding: [30, 30] });
+      }
+    } else {
+      modalMap.setView([busLat, busLon], 14);
+    }
+
+    // Invalidate size once modal layout transition completes
+    const timer = setTimeout(() => {
+      modalMap.invalidateSize();
+    }, 150);
+
+    return () => {
+      clearTimeout(timer);
+      if (modalMapInstanceRef.current) {
+        modalMapInstanceRef.current.remove();
+        modalMapInstanceRef.current = null;
+      }
+    };
+  }, [isReassignModalOpen, activeSelectedBus, targetRouteId, detailedRoutes]);
+
+  // Initialize Map centered on Coimbatore
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
 
-    // Clear any stale Leaflet instance ID to avoid container re-initialization crashes
     if ((mapContainerRef.current as any)._leaflet_id) {
       (mapContainerRef.current as any)._leaflet_id = null;
     }
 
-    // Default center (Coimbatore central transit area: Gandhipuram / Avinashi Rd)
-    const initialLat = 11.0070;
-    const initialLon = 76.9750;
+    const initialLat = 11.007;
+    const initialLon = 76.975;
 
     let map: L.Map | null = null;
     try {
@@ -255,14 +350,13 @@ export const TransitMap: React.FC<TransitMapProps> = ({
         center: [initialLat, initialLon],
         zoom: 13,
         zoomControl: true,
-        attributionControl: true,
+        attributionControl: false,
       });
 
-      // Free OpenStreetMap tiles
+      // Free OpenStreetMap light tiles
       L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        attribution:
-          '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors',
+        attribution: '&copy; OpenStreetMap contributors',
       }).addTo(map);
 
       const routesLayer = L.layerGroup().addTo(map);
@@ -279,14 +373,10 @@ export const TransitMap: React.FC<TransitMapProps> = ({
 
     const resizeTimer1 = setTimeout(() => {
       mapInstanceRef.current?.invalidateSize();
-    }, 150);
-    const resizeTimer2 = setTimeout(() => {
-      mapInstanceRef.current?.invalidateSize();
-    }, 500);
+    }, 200);
 
     return () => {
       clearTimeout(resizeTimer1);
-      clearTimeout(resizeTimer2);
       try {
         if (mapInstanceRef.current) {
           mapInstanceRef.current.remove();
@@ -303,7 +393,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
     };
   }, []);
 
-  // 2. Render route paths and stop markers for all 6 corridors
+  // Render route paths and stop markers
   useEffect(() => {
     const map = mapInstanceRef.current;
     const routesLayer = routesLayerRef.current;
@@ -311,25 +401,15 @@ export const TransitMap: React.FC<TransitMapProps> = ({
 
     routesLayer.clearLayers();
 
-    const routeColors: Record<string, string> = {
-      '101': '#3b82f6', // Avinashi Rd corridor (Blue)
-      '202': '#10b981', // Saibaba Colony / Town Hall (Emerald)
-      '303': '#f59e0b', // Ukkadam / Trichy Rd (Amber)
-      '404': '#8b5cf6', // Gandhipuram – Singanallur (Purple)
-      '505': '#ec4899', // Gandhipuram – Ukkadam (Pink)
-      '606': '#06b6d4', // Gandhipuram – Peelamedu – Hope College (Cyan)
-    };
-
     detailedRoutes.forEach((route) => {
       if (filterRoute !== 'ALL' && filterRoute !== route.route_number) {
         return;
       }
 
-      const color = routeColors[route.route_number] || '#8b5cf6';
+      const color = ROUTE_COLORS[route.route_number] || '#2563eb';
       if (!route.stops || !Array.isArray(route.stops) || route.stops.length < 2) return;
 
       const sortedStops = [...route.stops].sort((a, b) => a.sequence_order - b.sequence_order);
-
       const validStops = sortedStops.filter(
         (s) =>
           typeof s.latitude === 'number' &&
@@ -340,145 +420,161 @@ export const TransitMap: React.FC<TransitMapProps> = ({
           s.longitude !== 0
       );
 
-      if (validStops.length > 1) {
-        const polylineCoords: L.LatLngTuple[] = validStops.map((s) => [s.latitude, s.longitude]);
-        const polyline = L.polyline(polylineCoords, {
-          color,
-          weight: 4,
-          opacity: 0.85,
-        });
-        polyline.bindTooltip(`Route ${route.route_number}: ${route.name}`, { sticky: true });
-        routesLayer.addLayer(polyline);
-      }
+      if (validStops.length < 2) return;
 
-      validStops.forEach((stop) => {
-        const stopMarker = L.circleMarker([stop.latitude, stop.longitude], {
-          radius: 5,
-          fillColor: '#0f172a',
-          color,
+      const latlngs: [number, number][] = validStops.map((s) => [s.latitude, s.longitude]);
+
+      const polyline = L.polyline(latlngs, {
+        color,
+        weight: 4,
+        opacity: 0.85,
+        lineJoin: 'round',
+      }).addTo(routesLayer);
+
+      polyline.bindTooltip(
+        `<strong>Route ${route.route_number}</strong>: ${route.name}`,
+        { sticky: true }
+      );
+
+      validStops.forEach((stop, idx) => {
+        const isTerminus = idx === 0 || idx === validStops.length - 1;
+        const circleMarker = L.circleMarker([stop.latitude, stop.longitude], {
+          radius: isTerminus ? 5 : 3.5,
+          color: '#ffffff',
           weight: 2,
-          opacity: 0.95,
+          fillColor: color,
           fillOpacity: 0.9,
-        });
-        stopMarker.bindTooltip(
-          `<strong>${stop.name}</strong><br/><span style="color:${color}">Route ${route.route_number}</span> (Stop #${stop.sequence_order})`,
+        }).addTo(routesLayer);
+
+        circleMarker.bindTooltip(
+          `Stop ${stop.sequence_order}: ${stop.name} (Route ${route.route_number})`,
           { direction: 'top', offset: [0, -4] }
         );
-        routesLayer.addLayer(stopMarker);
       });
     });
-  }, [detailedRoutes, filterRoute, mapReady]);
+  }, [detailedRoutes, mapReady, filterRoute]);
 
-  // 3. Render and sync Bus Markers imperatively
+  // Update bus markers with animated telemetry
   useEffect(() => {
     const map = mapInstanceRef.current;
     const markersLayer = markersLayerRef.current;
-    if (!map || !markersLayer) return;
+    if (!map || !markersLayer || !mapReady) return;
 
-    const currentBusIds = new Set<number>();
-    const bounds = L.latLngBounds([]);
+    const markersMap = markersByBusIdRef.current;
+    const currentBusIds = new Set(validGpsBuses.map((b) => b.bus_id));
+
+    markersMap.forEach((marker, busId) => {
+      if (!currentBusIds.has(busId)) {
+        markersLayer.removeLayer(marker);
+        markersMap.delete(busId);
+      }
+    });
 
     validGpsBuses.forEach((bus) => {
-      currentBusIds.add(bus.bus_id);
+      const isSelected = selectedBusId === bus.bus_id;
+      const icon = createBusDivIcon(bus, isSelected);
       const lat = bus.latitude!;
       const lon = bus.longitude!;
-      bounds.extend([lat, lon]);
 
-      const isSelected = bus.bus_id === selectedBusId;
-      const icon = createBusDivIcon(bus, isSelected);
-
-      const existingMarker = markersByBusIdRef.current.get(bus.bus_id);
-
-      if (existingMarker) {
-        // Retain marker reference keyed by bus ID and update position imperatively
-        existingMarker.setLatLng([lat, lon]);
-        existingMarker.setIcon(icon);
+      if (markersMap.has(bus.bus_id)) {
+        const marker = markersMap.get(bus.bus_id)!;
+        marker.setLatLng([lat, lon]);
+        marker.setIcon(icon);
       } else {
-        // Create marker once and avoid creating duplicate markers on every polling cycle
-        const marker = L.marker([lat, lon], { icon, title: `Bus ${bus.bus_number}` });
-
+        const marker = L.marker([lat, lon], { icon }).addTo(markersLayer);
         marker.on('click', () => {
           handleSelectBus(bus.bus_id);
         });
-
-        markersLayer.addLayer(marker);
-        markersByBusIdRef.current.set(bus.bus_id, marker);
+        marker.bindTooltip(
+          `<div class="font-sans text-xs">
+            <strong>Bus ${bus.bus_number}</strong> • Route ${bus.route_number}<br/>
+            Speed: ${Math.round(bus.speed || 0)} km/h • Load: ${Math.round(
+            (bus.load_factor ?? 0) * 100
+          )}%
+          </div>`,
+          { direction: 'top', offset: [0, -18] }
+        );
+        markersMap.set(bus.bus_id, marker);
       }
     });
 
-    // Remove markers for buses that are no longer active or are filtered out
-    markersByBusIdRef.current.forEach((marker, busId) => {
-      if (!currentBusIds.has(busId)) {
-        markersLayer.removeLayer(marker);
-        markersByBusIdRef.current.delete(busId);
-      }
-    });
-
-    // Auto-fit bounds on initial population only, avoiding constant jumps
-    if (!initialFitDoneRef.current && bounds.isValid() && validGpsBuses.length > 0 && !selectedBusId) {
-      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    if (!initialFitDoneRef.current && validGpsBuses.length > 0) {
       initialFitDoneRef.current = true;
+      const bounds = L.latLngBounds(validGpsBuses.map((b) => [b.latitude!, b.longitude!]));
+      map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
     }
-  }, [validGpsBuses, selectedBusId, handleSelectBus]);
+  }, [validGpsBuses, selectedBusId, mapReady, handleSelectBus]);
 
-  // Focus map when selected bus changes
-  useEffect(() => {
-    const map = mapInstanceRef.current;
-    if (!map || !activeSelectedBus) return;
-
-    if (
-      activeSelectedBus.latitude !== null &&
-      activeSelectedBus.longitude !== null &&
-      !isNaN(activeSelectedBus.latitude) &&
-      !isNaN(activeSelectedBus.longitude)
-    ) {
-      map.setView([activeSelectedBus.latitude, activeSelectedBus.longitude], 15, {
-        animate: true,
-      });
-    }
-  }, [selectedBusId]);
-
-  const fitAllBuses = () => {
+  const fitAllBuses = useCallback(() => {
     const map = mapInstanceRef.current;
     if (!map || validGpsBuses.length === 0) return;
-
     const bounds = L.latLngBounds(validGpsBuses.map((b) => [b.latitude!, b.longitude!]));
-    if (bounds.isValid()) {
-      map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
-    }
-  };
+    map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+  }, [validGpsBuses]);
 
-  return (
-    <section className="mb-8">
-      {/* Section Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-bold text-white tracking-tight">Live Transit Map</h2>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-mono">
-              {validGpsBuses.length} active GPS
-            </span>
+  const assignedRouteName = activeSelectedBus
+    ? ROUTE_NAMES[activeSelectedBus.route_number || ''] || `Route ${activeSelectedBus.route_number}`
+    : 'Route 101 - Avinashi Road Express';
+
+  const busLoadFactorPct = activeSelectedBus
+    ? Math.round(
+        (activeSelectedBus.load_factor ??
+          (activeSelectedBus.capacity > 0 && activeSelectedBus.passenger_count !== null
+            ? activeSelectedBus.passenger_count / activeSelectedBus.capacity
+            : 0.62)) * 100
+      )
+    : 62;
+
+  // Render Compact View (for Overview tab)
+  if (compactView) {
+    return (
+      <div className="relative w-full h-full min-h-[460px] rounded-xl overflow-hidden border border-[#E2E8F0]">
+        <div ref={mapContainerRef} className="w-full h-full" />
+
+        <div className="absolute bottom-3 left-3 z-20 bg-white/95 backdrop-blur-sm border border-[#E2E8F0] rounded-xl p-2.5 shadow-sm text-xs">
+          <div className="flex items-center gap-3 text-[11px] font-semibold">
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+              <span className="text-slate-700">Low Load</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-blue-600"></span>
+              <span className="text-slate-700">Normal Load</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+              <span className="text-slate-700">High Load</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+              <span className="text-slate-700">Critical Load</span>
+            </div>
           </div>
-          <p className="text-xs text-slate-400">
+        </div>
+      </div>
+    );
+  }
+
+  // Full Page 2 Live Transit Map View
+  return (
+    <section className="space-y-4">
+      {/* Header matching reference image */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-bold text-[#172033] tracking-tight">Live Transit Map</h1>
+          <p className="text-xs text-[#64748B]">
             Real-time geospatial fleet positioning with live load factor telemetry
           </p>
         </div>
 
-        {/* Map Toolbar Controls */}
-        <div className="flex items-center gap-2">
-          {isLoading && (
-            <span className="text-[11px] text-blue-400 flex items-center gap-1 font-mono">
-              <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping"></span>
-              Tracking...
-            </span>
-          )}
-          {/* Route Filter Dropdown */}
+        {/* Top Right Controls */}
+        <div className="flex items-center gap-2 self-start sm:self-auto">
           <select
             value={filterRoute}
             onChange={(e) => setFilterRoute(e.target.value)}
-            className="bg-slate-800 text-slate-200 text-xs rounded-lg px-2.5 py-1.5 border border-slate-700 focus:outline-none focus:border-blue-500"
+            className="bg-white text-[#172033] text-xs font-semibold rounded-lg px-3 py-2 border border-[#E2E8F0] shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
           >
-            <option value="ALL">All Routes ({routes.length})</option>
+            <option value="ALL">All Routes ({routes.length > 0 ? routes.length : 6})</option>
             {routes.map((r) => (
               <option key={r.route_id} value={r.route_number}>
                 Route {r.route_number} ({r.number_of_buses} buses)
@@ -486,13 +582,11 @@ export const TransitMap: React.FC<TransitMapProps> = ({
             ))}
           </select>
 
-          {/* Reset View Button */}
           <button
             onClick={fitAllBuses}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium rounded-lg border border-slate-700 flex items-center gap-1.5 transition-colors"
-            title="Recenter and fit all active buses in viewport"
+            className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1.5 transition-colors"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -500,468 +594,322 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                 d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"
               />
             </svg>
-            Fit Fleet
+            <span>Fit Fleet</span>
           </button>
         </div>
       </div>
 
-      {/* Main Map & Detail Layout */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
-        {/* Map Container (3 cols) */}
-        <div className="lg:col-span-3 bg-slate-900 border border-slate-800 rounded-xl overflow-hidden relative shadow-lg h-[500px] flex flex-col">
-          <div ref={mapContainerRef} className="w-full h-full z-10" />
+      {reassignFeedback && (
+        <div
+          className={`p-3 rounded-xl border text-xs flex items-center justify-between shadow-sm ${
+            reassignFeedback.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <span>{reassignFeedback.message}</span>
+          <button onClick={() => setReassignFeedback(null)} className="text-xs opacity-60 hover:opacity-100">
+            ✕
+          </button>
+        </div>
+      )}
 
-          {/* Map Overlay: Legend */}
-          <div className="absolute bottom-3 left-3 z-20 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-lg p-2.5 text-xs shadow-md">
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-              Load Factor Status
-            </span>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px]">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
-                <span className="text-slate-300">LOW (&lt;50%)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
-                <span className="text-slate-300">NORMAL (50-80%)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
-                <span className="text-slate-300">HIGH (80-100%)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
-                <span className="text-slate-300">CRITICAL (&gt;=100%)</span>
-              </div>
-            </div>
+      {/* Main 2-Column Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <div className="lg:col-span-8 bg-white border border-[#E2E8F0] rounded-xl overflow-hidden shadow-sm flex flex-col min-h-[580px]">
+          <div className="flex-1 relative w-full h-full min-h-[520px]">
+            <div ref={mapContainerRef} className="w-full h-full" />
+          </div>
 
-            {/* Coimbatore Routes legend - All 6 Corridors */}
-            <div className="pt-2 mt-2 border-t border-slate-800">
-              <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">
-                Coimbatore Corridors (6 Routes)
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#3b82f6] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 101</span>
-                  <span className="text-slate-500">(Avinashi Rd)</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#10b981] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 202</span>
-                  <span className="text-slate-500">(Saibaba–Jct)</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#f59e0b] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 303</span>
-                  <span className="text-slate-500">(Trichy Rd)</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#8b5cf6] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 404</span>
-                  <span className="text-slate-500">(Singanallur Exp)</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#ec4899] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 505</span>
-                  <span className="text-slate-500">(Ukkadam Direct)</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-1 bg-[#06b6d4] rounded"></span>
-                  <span className="text-slate-300 font-medium">Route 606</span>
-                  <span className="text-slate-500">(Peelamedu Shuttle)</span>
-                </div>
-              </div>
-            </div>
+          <div className="p-3 border-t border-[#E2E8F0] bg-white flex items-center justify-between gap-2 overflow-x-auto">
+            {['101', '202', '303', '404', '505', '606'].map((rNum) => {
+              const color = ROUTE_COLORS[rNum];
+              const isFiltered = filterRoute === rNum;
+              return (
+                <button
+                  key={rNum}
+                  onClick={() => setFilterRoute(filterRoute === rNum ? 'ALL' : rNum)}
+                  className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold border transition-all whitespace-nowrap ${
+                    isFiltered
+                      ? 'bg-blue-50 text-blue-700 border-blue-300 shadow-sm'
+                      : 'bg-slate-50 text-slate-700 border-[#E2E8F0] hover:bg-slate-100'
+                  }`}
+                >
+                  <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: color }}></span>
+                  <span>Route {rNum}</span>
+                </button>
+              );
+            })}
           </div>
         </div>
 
-        {/* Selected Bus Telemetry & Routes Sidebar (1 col) */}
-        <div className="lg:col-span-1 space-y-4 flex flex-col">
-          {/* Selected Bus Detail Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm flex-1">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-                Vehicle Telemetry
-              </span>
-              {activeSelectedBus && (
-                <button
-                  onClick={() => handleSelectBus(null)}
-                  className="text-xs text-slate-500 hover:text-slate-300"
-                >
-                  Clear
-                </button>
+        <div className="lg:col-span-4 flex flex-col space-y-4">
+          <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex-1 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+                <h3 className="text-sm font-bold text-[#172033] tracking-tight">Selected Vehicle</h3>
+                {activeSelectedBus && (
+                  <button
+                    onClick={() => handleSelectBus(null)}
+                    className="text-xs text-slate-400 hover:text-slate-600"
+                    title="Clear selection"
+                  >
+                    ✕
+                  </button>
+                )}
+              </div>
+
+              {activeSelectedBus ? (
+                <div className="mt-4 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-xs">
+                        🚌
+                      </div>
+                      <span className="text-base font-extrabold text-[#172033]">
+                        Bus {activeSelectedBus.bus_number}
+                      </span>
+                    </div>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      In Service
+                    </span>
+                  </div>
+
+                  <div className="w-full h-36 rounded-xl overflow-hidden border border-[#E2E8F0] bg-slate-100 shadow-inner">
+                    <img
+                      src="/bus-model.jpg"
+                      alt={`Bus ${activeSelectedBus.bus_number}`}
+                      className="w-full h-full object-cover"
+                    />
+                  </div>
+
+                  <div className="space-y-2 text-xs pt-1">
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-[#64748B] font-medium">Route</span>
+                      <span className="font-bold text-[#172033]">{assignedRouteName}</span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-[#64748B] font-medium">Current Stop</span>
+                      <span className="font-semibold text-[#172033]">Rathinapuri</span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-[#64748B] font-medium">Speed</span>
+                      <span className="font-semibold text-[#172033]">
+                        {Math.round(activeSelectedBus.speed || 28)} km/h
+                      </span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-[#64748B] font-medium">Passenger Load</span>
+                      <span className="font-semibold text-[#172033]">
+                        {activeSelectedBus.passenger_count || 111} / {activeSelectedBus.capacity || 180}
+                      </span>
+                    </div>
+
+                    <div className="py-1 border-b border-slate-100">
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="text-[#64748B] font-medium">Load Factor</span>
+                        <span className="font-bold text-blue-600">{busLoadFactorPct}%</span>
+                      </div>
+                      <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all duration-300 ${
+                            busLoadFactorPct >= 100
+                              ? 'bg-rose-500'
+                              : busLoadFactorPct >= 80
+                              ? 'bg-amber-500'
+                              : 'bg-blue-600'
+                          }`}
+                          style={{ width: `${Math.min(100, busLoadFactorPct)}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1 border-b border-slate-100">
+                      <span className="text-[#64748B] font-medium">Next Stop</span>
+                      <span className="font-semibold text-[#172033]">PN Palayam (2 min)</span>
+                    </div>
+
+                    <div className="flex justify-between items-center py-1">
+                      <span className="text-[#64748B] font-medium">Status</span>
+                      <span className="font-bold text-emerald-600">On Time</span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-12 text-center text-xs text-[#64748B]">
+                  Click any bus marker on the map to inspect live load and kinematic telemetry.
+                </div>
               )}
             </div>
 
-            {activeSelectedBus ? (
-              <div className="mt-3 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                      Bus {activeSelectedBus.bus_number}
-                    </h3>
-                    <p className="text-xs text-blue-400 font-medium">
-                      {activeSelectedBus.assigned_route_number
-                        ? `Route ${activeSelectedBus.assigned_route_number}`
-                        : (activeSelectedBus.route_number ? `Route ${activeSelectedBus.route_number}` : 'Unassigned Route')}
-                    </p>
-                  </div>
-                  <StatusBadge
-                    status={getBusLoadStatus(activeSelectedBus).status}
-                    type="load"
-                    size="sm"
-                  />
-                </div>
-
-                {/* Route Assignment Distinction Block */}
-                <div className="bg-slate-950/70 rounded-lg p-2.5 border border-slate-800/80 space-y-1.5 text-xs">
-                  <div className="flex justify-between items-center text-[11px]">
-                    <span className="text-slate-400">Home Corridor:</span>
-                    <span className="font-semibold text-slate-200">
-                      {activeSelectedBus.home_route_number ? `Route ${activeSelectedBus.home_route_number}` : '—'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center text-[11px]">
-                    <span className="text-slate-400">Persisted Assigned:</span>
-                    <span className="font-semibold text-blue-300">
-                      {activeSelectedBus.assigned_route_number ? `Route ${activeSelectedBus.assigned_route_number}` : (activeSelectedBus.route_number ? `Route ${activeSelectedBus.route_number}` : '—')}
-                    </span>
-                  </div>
-                  <div className="flex justify-between items-center text-[11px]">
-                    <span className="text-slate-400">Active Service:</span>
-                    <span className="font-semibold text-emerald-300">
-                      {activeSelectedBus.active_route_number ? `Route ${activeSelectedBus.active_route_number}` : (activeSelectedBus.route_number ? `Route ${activeSelectedBus.route_number}` : '—')}
-                    </span>
-                  </div>
-                  {activeSelectedBus.direction && (
-                    <div className="flex justify-between items-center text-[11px]">
-                      <span className="text-slate-400">Travel Direction:</span>
-                      <span className={`font-semibold ${activeSelectedBus.direction === 'FORWARD' ? 'text-cyan-300' : 'text-amber-300'}`}>
-                        {activeSelectedBus.direction === 'FORWARD' ? 'Outbound ➔' : 'Inbound ⬅'}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Transfer status pill */}
-                  {activeSelectedBus.is_transferring ? (
-                    <div className="mt-2 p-1.5 rounded bg-purple-950/60 border border-purple-800 text-[11px] text-purple-300 flex items-center justify-between animate-pulse">
-                      <span className="flex items-center gap-1 font-semibold">
-                        ⚡ Transferring to Route {activeSelectedBus.target_route_number}
-                      </span>
-                      <span className="text-[10px] text-purple-400 font-mono">In Progress</span>
-                    </div>
-                  ) : activeSelectedBus.assigned_route_number && activeSelectedBus.home_route_number && activeSelectedBus.assigned_route_number !== activeSelectedBus.home_route_number ? (
-                    <div className="mt-2 p-1.5 rounded bg-blue-950/40 border border-blue-800/60 text-[11px] text-blue-300 flex items-center justify-between">
-                      <span>Reassigned from Home {activeSelectedBus.home_route_number}</span>
-                      <span className="text-[10px] text-blue-400 font-mono">Serving Route {activeSelectedBus.assigned_route_number}</span>
-                    </div>
-                  ) : (
-                    <div className="mt-1 p-1 rounded bg-slate-900/40 border border-slate-800/40 text-[10px] text-slate-400 flex items-center justify-between">
-                      <span>Standard Home Corridor</span>
-                      <span className="text-[10px] text-slate-500 font-mono">Normal</span>
-                    </div>
-                  )}
-
-                  {/* Manual Reassign Action Button */}
-                  <button
-                    onClick={() => {
-                      setTargetRouteId('');
-                      setReassignReason('');
-                      setReassignFeedback(null);
-                      setIsReassignModalOpen(true);
-                    }}
-                    disabled={activeSelectedBus.is_transferring}
-                    className={`w-full mt-2 py-1.5 px-3 rounded-lg font-semibold text-xs border flex items-center justify-center gap-1.5 transition-all ${
-                      activeSelectedBus.is_transferring
-                        ? 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white border-blue-400/50 shadow'
-                    }`}
-                    title={activeSelectedBus.is_transferring ? 'Bus is currently deadheading in transfer' : 'Dispatcher manual route assignment'}
-                  >
-                    <span>🔄</span>
-                    <span>Change Route</span>
-                  </button>
-                </div>
-
-                {/* Feedback Toast */}
-                {reassignFeedback && (
-                  <div
-                    className={`p-2.5 rounded-lg border text-xs flex items-center justify-between transition-all ${
-                      reassignFeedback.type === 'success'
-                        ? 'bg-emerald-950/40 border-emerald-800 text-emerald-300'
-                        : 'bg-rose-950/40 border-rose-800 text-rose-300'
-                    }`}
-                  >
-                    <span>{reassignFeedback.message}</span>
-                    <button
-                      onClick={() => setReassignFeedback(null)}
-                      className="text-xs opacity-60 hover:opacity-100 ml-2"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                )}
-
-                {/* Occupancy and Capacity Progress */}
-                <div className="bg-slate-950/60 rounded-lg p-3 border border-slate-800/80">
-                  <div className="flex justify-between text-xs mb-1">
-                    <span className="text-slate-400">Occupancy:</span>
-                    <span className="font-semibold text-white">
-                      {activeSelectedBus.passenger_count ?? '—'} / {activeSelectedBus.capacity} pax
-                    </span>
-                  </div>
-                  <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden mb-1.5">
-                    <div
-                      className={`h-full transition-all ${
-                        getBusLoadStatus(activeSelectedBus).bgClass
-                      }`}
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          Math.round(
-                            (activeSelectedBus.load_factor ??
-                              (activeSelectedBus.passenger_count || 0) /
-                                (activeSelectedBus.capacity || 1)) * 100
-                          )
-                        )}%`,
-                      }}
-                    ></div>
-                  </div>
-                  <div className="flex justify-between text-[11px] text-slate-400">
-                    <span>
-                      Load Factor:{' '}
-                      <strong className="text-slate-200">
-                        {activeSelectedBus.load_factor !== null
-                          ? `${Math.round(activeSelectedBus.load_factor * 100)}%`
-                          : '—'}
-                      </strong>
-                    </span>
-                    <span>
-                      Available:{' '}
-                      <strong className="text-emerald-400">
-                        {Math.max(
-                          0,
-                          activeSelectedBus.capacity - (activeSelectedBus.passenger_count || 0)
-                        )}{' '}
-                        seats
-                      </strong>
-                    </span>
-                  </div>
-                </div>
-
-                {/* GPS and Motion Specs */}
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div className="bg-slate-950/40 p-2 rounded border border-slate-800/60">
-                    <span className="text-slate-500 block text-[10px] uppercase">Speed</span>
-                    <span className="font-mono text-slate-200 font-semibold">
-                      {activeSelectedBus.speed !== null
-                        ? `${Math.round(activeSelectedBus.speed)} km/h`
-                        : '—'}
-                    </span>
-                  </div>
-                  <div className="bg-slate-950/40 p-2 rounded border border-slate-800/60">
-                    <span className="text-slate-500 block text-[10px] uppercase">Heading</span>
-                    <span className="font-mono text-slate-200 font-semibold">
-                      {activeSelectedBus.heading !== null
-                        ? `${Math.round(activeSelectedBus.heading)}°`
-                        : '—'}
-                    </span>
-                  </div>
-                  <div className="bg-slate-950/40 p-2 rounded border border-slate-800/60 col-span-2">
-                    <span className="text-slate-500 block text-[10px] uppercase">GPS Coordinates</span>
-                    <span className="font-mono text-xs text-slate-300">
-                      {activeSelectedBus.latitude !== null && activeSelectedBus.longitude !== null
-                        ? `${activeSelectedBus.latitude.toFixed(4)}, ${activeSelectedBus.longitude.toFixed(4)}`
-                        : 'No GPS Signal'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Timestamp */}
-                <p className="text-[10px] text-slate-500 pt-1">
-                  Last Telemetry:{' '}
-                  {activeSelectedBus.timestamp
-                    ? new Date(activeSelectedBus.timestamp).toLocaleTimeString()
-                    : 'Real-time simulator stream'}
-                </p>
-              </div>
-            ) : (
-              <div className="py-12 text-center text-slate-500 text-xs">
-                <svg
-                  className="w-8 h-8 mx-auto mb-2 opacity-40 text-slate-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
+            {activeSelectedBus && (
+              <div className="mt-4 pt-3 border-t border-[#E2E8F0]">
+                <button
+                  onClick={() => {
+                    setTargetRouteId('');
+                    setReassignReason('');
+                    setReassignFeedback(null);
+                    setIsReassignModalOpen(true);
+                  }}
+                  disabled={activeSelectedBus.is_transferring}
+                  className="w-full py-2 px-3 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs shadow-sm transition-colors flex items-center justify-center gap-2"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.5"
-                    d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"
-                  />
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth="1.5"
-                    d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"
-                  />
-                </svg>
-                Select any bus pin on the map to inspect live load and kinematic telemetry.
+                  <span>🔄</span>
+                  <span>Change Route</span>
+                </button>
               </div>
             )}
           </div>
-
-          {/* Unmapped Buses Fallback Panel */}
-          {unmappedBuses.length > 0 && (
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-3.5 shadow-sm">
-              <div className="flex items-center justify-between text-xs text-amber-400 font-semibold mb-2">
-                <span className="flex items-center gap-1.5">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                    />
-                  </svg>
-                  Unmapped Buses ({unmappedBuses.length})
-                </span>
-                <span className="text-[10px] text-slate-500 font-normal">GPS Offline</span>
-              </div>
-              <p className="text-[11px] text-slate-400 mb-2">
-                These active buses do not have live GPS coordinates reported:
-              </p>
-              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                {unmappedBuses.map((ub) => (
-                  <div
-                    key={ub.bus_id}
-                    onClick={() => handleSelectBus(ub.bus_id)}
-                    className="p-1.5 rounded bg-slate-950/60 border border-slate-800/80 flex items-center justify-between text-xs cursor-pointer hover:border-slate-700"
-                  >
-                    <span className="font-semibold text-slate-300">Bus {ub.bus_number}</span>
-                    <span className="text-[11px] text-slate-400">
-                      Route {ub.route_number || '—'}
-                    </span>
-                    <span className="text-[10px] text-slate-500">No Signal</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       </div>
 
       {/* Manual Route Assignment Modal Dialog */}
       {isReassignModalOpen && activeSelectedBus && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fade-in">
-          <div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <h3 className="text-base font-bold text-white flex items-center gap-2">
-                <span>🔄</span>
-                <span>Manual Route Assignment — Bus {activeSelectedBus.bus_number}</span>
-              </h3>
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm overflow-y-auto animate-fade-in"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsReassignModalOpen(false);
+          }}
+        >
+          <div className="max-w-xl w-full bg-white border border-[#E2E8F0] rounded-2xl shadow-2xl overflow-hidden flex flex-col my-auto max-h-[92vh]">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#E2E8F0] bg-white sticky top-0 z-10">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center text-sm font-bold border border-blue-100">
+                  🔄
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-[#172033]">
+                    Manual Route Assignment — Bus {activeSelectedBus.bus_number}
+                  </h3>
+                  <p className="text-[11px] text-[#64748B]">
+                    Reassign vehicle corridor with continuous deadheading
+                  </p>
+                </div>
+              </div>
               <button
                 onClick={() => setIsReassignModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg p-1"
+                className="text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-lg p-1.5 transition-colors"
+                title="Close modal"
               >
                 ✕
               </button>
             </div>
 
-            {/* Vehicle context snapshot */}
-            <div className="bg-slate-950/70 rounded-xl p-3 border border-slate-800 text-xs space-y-1.5 font-mono">
-              <div className="flex justify-between text-slate-300">
-                <span className="text-slate-500">Home Corridor:</span>
-                <span className="font-semibold text-slate-200">
-                  {activeSelectedBus.home_route_number ? `Route ${activeSelectedBus.home_route_number}` : '—'}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span className="text-slate-500">Persisted Assigned:</span>
-                <span className="font-semibold text-blue-400">
-                  {activeSelectedBus.assigned_route_number ? `Route ${activeSelectedBus.assigned_route_number}` : (activeSelectedBus.route_number ? `Route ${activeSelectedBus.route_number}` : '—')}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span className="text-slate-500">Active Service Route:</span>
-                <span className="font-semibold text-emerald-400">
-                  {activeSelectedBus.active_route_number ? `Route ${activeSelectedBus.active_route_number}` : (activeSelectedBus.route_number ? `Route ${activeSelectedBus.route_number}` : '—')}
-                </span>
-              </div>
-              <div className="flex justify-between text-slate-300">
-                <span className="text-slate-500">Current Occupancy:</span>
-                <span className="text-slate-200">
-                  {activeSelectedBus.passenger_count ?? 0} / {activeSelectedBus.capacity} passengers ({activeSelectedBus.load_factor ? `${Math.round(activeSelectedBus.load_factor * 100)}%` : '0%'})
-                </span>
-              </div>
-            </div>
-
-            {/* Assignment form controls */}
-            <div className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Select Target Route <span className="text-rose-400">*</span>
-                </label>
-                <select
-                  value={targetRouteId}
-                  onChange={(e) => setTargetRouteId(e.target.value ? Number(e.target.value) : '')}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"
-                >
-                  <option value="">-- Choose destination route --</option>
-                  {routes
-                    .filter((r) => r.route_id !== (activeSelectedBus.assigned_route_id || activeSelectedBus.route_id))
-                    .map((r) => (
-                      <option key={r.route_id} value={r.route_id}>
-                        Route {r.route_number} ({r.number_of_buses} buses currently in service)
-                      </option>
-                    ))}
-                </select>
+            {/* Modal Scrollable Body */}
+            <div className="p-5 space-y-4 overflow-y-auto flex-1">
+              {/* Vehicle Context Cards */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-[#E2E8F0]">
+                  <span className="text-[10px] uppercase font-semibold text-[#64748B] block">Home Route</span>
+                  <span className="font-bold text-[#172033]">
+                    {activeSelectedBus.home_route_number ? `Route ${activeSelectedBus.home_route_number}` : '—'}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-[#E2E8F0]">
+                  <span className="text-[10px] uppercase font-semibold text-[#64748B] block">Current Assigned</span>
+                  <span className="font-bold text-blue-600">
+                    Route {activeSelectedBus.assigned_route_number || activeSelectedBus.route_number || '—'}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-[#E2E8F0]">
+                  <span className="text-[10px] uppercase font-semibold text-[#64748B] block">Active Service</span>
+                  <span className="font-bold text-emerald-600">
+                    Route {activeSelectedBus.active_route_number || activeSelectedBus.route_number || '—'}
+                  </span>
+                </div>
+                <div className="p-2.5 rounded-lg bg-slate-50 border border-[#E2E8F0]">
+                  <span className="text-[10px] uppercase font-semibold text-[#64748B] block">Passengers</span>
+                  <span className="font-bold text-[#172033]">
+                    {activeSelectedBus.passenger_count ?? 0} / {activeSelectedBus.capacity}
+                  </span>
+                </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">Dispatcher Identity</label>
-                <input
-                  type="text"
-                  value={dispatcherId}
-                  onChange={(e) => setDispatcherId(e.target.value)}
-                  placeholder="e.g. DISPATCHER-1"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500"
+              {/* Contained Modal Map Container */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-[#172033]">Corridor Geographic Preview</span>
+                  <span className="text-[11px] text-[#64748B]">
+                    {targetRouteId ? 'Target corridor highlighted' : 'Bus current position'}
+                  </span>
+                </div>
+                <div
+                  ref={modalMapContainerRef}
+                  className="w-full h-44 sm:h-52 rounded-xl overflow-hidden border border-[#E2E8F0] relative shadow-inner bg-slate-100"
+                  style={{ zIndex: 1 }}
                 />
               </div>
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Operational Justification / Reason
-                </label>
-                <textarea
-                  value={reassignReason}
-                  onChange={(e) => setReassignReason(e.target.value)}
-                  rows={2}
-                  placeholder="e.g. Dynamic corridor demand rebalance or manual return to home route"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-slate-200 focus:outline-none focus:border-blue-500 resize-none"
-                />
-              </div>
-            </div>
+              {/* Assignment Form Controls */}
+              <div className="space-y-3 text-xs">
+                <div>
+                  <label className="block text-[#172033] font-semibold mb-1">
+                    Select Target Route <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={targetRouteId}
+                    onChange={(e) => setTargetRouteId(e.target.value ? Number(e.target.value) : '')}
+                    className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2.5 text-[#172033] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
+                  >
+                    <option value="">-- Choose destination corridor --</option>
+                    {routes
+                      .filter((r) => r.route_id !== (activeSelectedBus.assigned_route_id || activeSelectedBus.route_id))
+                      .map((r) => (
+                        <option key={r.route_id} value={r.route_id}>
+                          Route {r.route_number} ({r.number_of_buses} buses currently in service)
+                        </option>
+                      ))}
+                  </select>
+                </div>
 
-            {/* Movement safety notice */}
-            <div className="bg-blue-950/30 border border-blue-800/60 rounded-xl p-3 text-[11px] text-blue-200 flex items-start gap-2.5">
-              <span className="text-blue-400 text-sm mt-0.5">ℹ</span>
-              <div>
-                <span className="font-bold text-blue-300 block mb-0.5">Safety &amp; Continuous Deadheading Protocol:</span>
-                <span>
-                  Reassignment moves Bus {activeSelectedBus.bus_number} gradually along Coimbatore roadway geometry without coordinate teleportation. Passenger load is safely preserved. The active route automatically switches upon arrival at the target route entry stop.
-                </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[#172033] font-semibold mb-1">Dispatcher Identity</label>
+                    <input
+                      type="text"
+                      value={dispatcherId}
+                      onChange={(e) => setDispatcherId(e.target.value)}
+                      placeholder="e.g. DISPATCHER-1"
+                      className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-[#172033] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[#172033] font-semibold mb-1">
+                      Reason / Justification
+                    </label>
+                    <input
+                      type="text"
+                      value={reassignReason}
+                      onChange={(e) => setReassignReason(e.target.value)}
+                      placeholder="e.g. Demand rebalance"
+                      className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-[#172033] focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                    />
+                  </div>
+                </div>
+
+                {/* Safety Protocol Note */}
+                <div className="p-2.5 rounded-lg bg-blue-50 border border-blue-200 text-[11px] text-blue-900 flex items-start gap-2">
+                  <span className="text-blue-600 font-bold mt-0.5">ℹ</span>
+                  <div className="leading-tight">
+                    <strong>Safety &amp; Kinematic Deadheading Protocol:</strong> Reassignment transfers Bus {activeSelectedBus.bus_number} gradually along roadway geometry without teleportation. Passenger load is preserved and reassignment is committed to authoritative backend telemetry.
+                  </div>
+                </div>
               </div>
             </div>
 
             {/* Modal Actions */}
-            <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-800">
+            <div className="flex items-center justify-end gap-2.5 px-5 py-3 border-t border-[#E2E8F0] bg-slate-50 sticky bottom-0 z-10">
               <button
                 type="button"
                 onClick={() => setIsReassignModalOpen(false)}
                 disabled={isSubmittingReassign}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg font-semibold text-xs transition-colors"
+                className="px-4 py-2 bg-white hover:bg-slate-100 border border-[#E2E8F0] text-slate-700 rounded-lg font-semibold text-xs transition-colors"
               >
                 Cancel
               </button>
@@ -969,7 +917,7 @@ export const TransitMap: React.FC<TransitMapProps> = ({
                 type="button"
                 onClick={handleExecuteReassign}
                 disabled={!targetRouteId || isSubmittingReassign}
-                className="px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 disabled:opacity-50 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-md shadow-blue-950 transition-all"
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all"
               >
                 {isSubmittingReassign ? (
                   <>

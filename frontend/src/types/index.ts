@@ -167,6 +167,14 @@ export interface ReallocationReviewCreate {
   decision: ReviewDecision;
   dispatcher_id?: string;
   notes?: string;
+  target_route_id?: number;
+  target_route_number?: string;
+  source_route_id?: number;
+  source_route_number?: string;
+  candidate_bus_id?: number;
+  candidate_bus_number?: string;
+  score?: number;
+  priority?: string;
 }
 
 export interface ReallocationReview {

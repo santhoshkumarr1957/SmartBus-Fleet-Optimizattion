@@ -102,6 +102,14 @@ class ReallocationReviewCreate(BaseModel):
         default=None,
         description="Optional operational justification or dispatch remarks",
     )
+    target_route_id: Optional[int] = Field(default=None, description="Optional target route ID")
+    target_route_number: Optional[str] = Field(default=None, description="Optional target route number")
+    source_route_id: Optional[int] = Field(default=None, description="Optional source route ID")
+    source_route_number: Optional[str] = Field(default=None, description="Optional source route number")
+    candidate_bus_id: Optional[int] = Field(default=None, description="Optional candidate bus ID")
+    candidate_bus_number: Optional[str] = Field(default=None, description="Optional candidate bus number")
+    score: Optional[float] = Field(default=None, description="Optional suitability score")
+    priority: Optional[str] = Field(default=None, description="Optional priority tier")
 
 
 class ReallocationReviewResponse(BaseModel):

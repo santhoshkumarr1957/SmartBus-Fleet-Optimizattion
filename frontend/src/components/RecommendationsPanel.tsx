@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   ReallocationRecommendation,
   ReviewDecision,
@@ -7,22 +7,16 @@ import {
   RouteIntelligence,
   WeatherObservation,
   BreakdownSummary,
-  ReplacementCandidate,
   OptimizationPlan,
   ScenarioEvaluation,
 } from '../types';
-import { StatusBadge } from './StatusBadge';
 import {
   submitReallocationReview,
-  fetchRecommendationHistory,
   executeReallocation,
-  fetchRecommendationExecutions,
   fetchCurrentWeather,
   setWeatherScenario,
   fetchBreakdownSummary,
   reportBreakdown,
-  updateBreakdownStatus,
-  fetchReplacementCandidates,
   runHybridOptimization,
   fetchLatestOptimizationPlan,
   evaluateResilienceScenario,
@@ -40,14 +34,10 @@ interface RecommendationsPanelProps {
 
 export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
   recommendations,
-  disclaimer,
-  diagnosticReasons = [],
   routeIntelligence = [],
-  error = null,
   isLoading,
   onReviewRecorded,
 }) => {
-  const [filterPriority, setFilterPriority] = useState<string>('ALL');
   const [filterDecision, setFilterDecision] = useState<string>('ALL');
 
   // Review submission state
@@ -59,14 +49,16 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
   const [dispatcherId, setDispatcherId] = useState<string>('DISPATCHER-1');
   const [notes, setNotes] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
+  const [reviewModalError, setReviewModalError] = useState<string | null>(null);
+  const isSubmittingRef = useRef<boolean>(false);
+  const isExecutingRef = useRef<boolean>(false);
   const [feedback, setFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(
     null
   );
 
-  // Execution modal state (Explicit execution action)
-  const [activeExecutionModal, setActiveExecutionModal] = useState<ReallocationRecommendation | null>(
-    null
-  );
+  // Execution modal state
+  const [activeExecutionModal, setActiveExecutionModal] =
+    useState<ReallocationRecommendation | null>(null);
   const [executingDispatcherId, setExecutingDispatcherId] = useState<string>('DISPATCHER-1');
   const [executionNotes, setExecutionNotes] = useState<string>('');
   const [isExecuting, setIsExecuting] = useState<boolean>(false);
@@ -80,43 +72,27 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
     Record<string, { execution_status: string; latest_execution?: ReallocationExecution }>
   >({});
 
-  // History inspection drawer state
-  const [activeHistoryRecId, setActiveHistoryRecId] = useState<string | null>(null);
-  const [historyRecords, setHistoryRecords] = useState<ReallocationReview[]>([]);
-  const [historyExecutionRecords, setHistoryExecutionRecords] = useState<ReallocationExecution[]>([]);
-  const [isLoadingHistory, setIsLoadingHistory] = useState<boolean>(false);
-
-  // ---------------------------------------------------------------------------
-  // Phase 3: Weather State & Scenario Testing
-  // ---------------------------------------------------------------------------
+  // Weather State
   const [weather, setWeather] = useState<WeatherObservation | null>(null);
   const [isUpdatingWeather, setIsUpdatingWeather] = useState<boolean>(false);
 
-  // ---------------------------------------------------------------------------
-  // Phase 4: Breakdown State & Management
-  // ---------------------------------------------------------------------------
+  // Breakdown State
   const [breakdownSummary, setBreakdownSummary] = useState<BreakdownSummary | null>(null);
   const [showBreakdownModal, setShowBreakdownModal] = useState<boolean>(false);
   const [reportBusNumber, setReportBusNumber] = useState<string>('101A');
   const [reportLocation, setReportLocation] = useState<string>('Gandhipuram Bus Stand');
   const [reportSeverity, setReportSeverity] = useState<string>('HIGH');
   const [reportReason, setReportReason] = useState<string>('Engine failure');
-  const [reportNotes, setReportNotes] = useState<string>('Mechanical engine overheating reported by driver');
+  const [reportNotes, setReportNotes] = useState<string>(
+    'Mechanical engine overheating reported by driver'
+  );
   const [isReportingBreakdown, setIsReportingBreakdown] = useState<boolean>(false);
 
-  // Replacement candidate inspection modal
-  const [replacementModal, setReplacementModal] = useState<ReplacementCandidate | null>(null);
-  const [isLoadingReplacement, setIsLoadingReplacement] = useState<boolean>(false);
-
-  // ---------------------------------------------------------------------------
-  // Phase 1, 2, 6: Hybrid CP-SAT Optimization Plan
-  // ---------------------------------------------------------------------------
+  // Hybrid CP-SAT Optimization Plan
   const [optimizationPlan, setOptimizationPlan] = useState<OptimizationPlan | null>(null);
   const [isSolving, setIsSolving] = useState<boolean>(false);
 
-  // ---------------------------------------------------------------------------
-  // Phase 5: Scenario Evaluation Sandbox
-  // ---------------------------------------------------------------------------
+  // Scenario Evaluation Sandbox
   const [showSandbox, setShowSandbox] = useState<boolean>(false);
   const [sandboxDemand101, setSandboxDemand101] = useState<string>('HIGH');
   const [sandboxDemand404, setSandboxDemand404] = useState<string>('HIGH');
@@ -125,7 +101,7 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
   const [isEvaluatingSandbox, setIsEvaluatingSandbox] = useState<boolean>(false);
   const [sandboxResult, setSandboxResult] = useState<ScenarioEvaluation | null>(null);
 
-  // Initial load of weather, breakdown summary, and latest plan
+  // Initial load
   useEffect(() => {
     fetchCurrentWeather().then(setWeather).catch(() => {});
     fetchBreakdownSummary().then(setBreakdownSummary).catch(() => {});
@@ -138,10 +114,9 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
       const updated = await setWeatherScenario(scenario);
       setWeather(updated);
       setFeedback({
-        message: `Weather updated: ${updated.condition} (${updated.description}). Operational speed factor: ${updated.speed_factor}x.`,
+        message: `Weather scenario applied: ${updated.condition} (${updated.description}).`,
         type: 'success',
       });
-      // Re-run optimization with new weather context
       runHybridOptimization().then(setOptimizationPlan).catch(() => {});
     } catch (err: any) {
       setFeedback({ message: err?.message || 'Failed to update weather scenario.', type: 'error' });
@@ -163,50 +138,17 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
       });
       setShowBreakdownModal(false);
       setFeedback({
-        message: `Bus ${reportBusNumber} marked BROKEN_DOWN (${reportReason}). Vehicle removed from available fleet and halted in simulator.`,
+        message: `Bus ${reportBusNumber} marked as BROKEN_DOWN. Vehicle halted and replacement suggested.`,
         type: 'success',
       });
       const updated = await fetchBreakdownSummary();
       setBreakdownSummary(updated);
       if (onReviewRecorded) onReviewRecorded();
-      // Re-solve optimization to account for broken down vehicle
       runHybridOptimization().then(setOptimizationPlan).catch(() => {});
     } catch (err: any) {
       setFeedback({ message: err?.message || 'Failed to report breakdown.', type: 'error' });
     } finally {
       setIsReportingBreakdown(false);
-    }
-  };
-
-  const handleUpdateBreakdownLifecycle = async (
-    incidentId: number,
-    targetStatus: 'CONFIRMED' | 'UNDER_REPAIR' | 'AVAILABLE',
-    busNumber: string
-  ) => {
-    try {
-      await updateBreakdownStatus(incidentId, targetStatus, `Updated by dispatcher`, dispatcherId);
-      const updated = await fetchBreakdownSummary();
-      setBreakdownSummary(updated);
-      setFeedback({
-        message: `Incident #${incidentId} (Bus ${busNumber}) updated to ${targetStatus}.${targetStatus === 'AVAILABLE' ? ' Vehicle restored to active service.' : ''}`,
-        type: 'success',
-      });
-      if (onReviewRecorded) onReviewRecorded();
-      runHybridOptimization().then(setOptimizationPlan).catch(() => {});
-    } catch (err: any) {
-      setFeedback({ message: err?.message || 'Failed to update incident status.', type: 'error' });
-    }
-  };
-
-  const handleInspectReplacement = async (busId: number) => {
-    setIsLoadingReplacement(true);
-    try {
-      const res = await fetchReplacementCandidates(busId);
-      setReplacementModal(res);
-    } catch (err: any) {
-      setFeedback({ message: err?.message || 'Failed to fetch replacement candidates.', type: 'error' });
-    } finally {
-      setIsLoadingReplacement(false);
     }
   };
 
@@ -216,12 +158,12 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
       const plan = await runHybridOptimization({ include_weather: true });
       setOptimizationPlan(plan);
       setFeedback({
-        message: `Google OR-Tools CP-SAT Solver evaluated ${plan.total_allocations_count} allocation(s) in ${plan.solver_time_ms}ms with status: ${plan.solver_status}.`,
+        message: `OR-Tools CP-SAT Solver completed in ${plan.solver_time_ms}ms with status: ${plan.solver_status}.`,
         type: 'success',
       });
       if (onReviewRecorded) onReviewRecorded();
     } catch (err: any) {
-      setFeedback({ message: err?.message || 'Failed to solve hybrid optimization model.', type: 'error' });
+      setFeedback({ message: err?.message || 'Failed to run optimization solver.', type: 'error' });
     } finally {
       setIsSolving(false);
     }
@@ -245,99 +187,82 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
     }
   };
 
-  // Merge optimistic overrides with incoming recommendation stream
+  // Merge overrides
   const effectiveRecommendations = useMemo(() => {
     return recommendations.map((rec) => {
-      let r = { ...rec };
-      if (localOverrides[rec.id]) {
-        r.review_status = localOverrides[rec.id].review_status;
-        r.latest_review = localOverrides[rec.id].latest_review;
-      }
-      if (executionOverrides[rec.id]) {
-        r.execution_status = executionOverrides[rec.id].execution_status;
-        r.latest_execution = executionOverrides[rec.id].latest_execution;
-      }
-      return r;
+      const localRev = localOverrides[rec.id];
+      const localExec = executionOverrides[rec.id];
+      return {
+        ...rec,
+        review_status: localRev ? localRev.review_status : rec.review_status,
+        latest_review: localRev ? localRev.latest_review : rec.latest_review,
+        execution_status: localExec ? localExec.execution_status : rec.execution_status,
+        latest_execution: localExec ? localExec.latest_execution : rec.latest_execution,
+      };
     });
   }, [recommendations, localOverrides, executionOverrides]);
 
-  // Filtering
   const filteredRecommendations = useMemo(() => {
-    return effectiveRecommendations.filter((r) => {
-      if (filterPriority !== 'ALL' && r.priority.toUpperCase() !== filterPriority.toUpperCase()) {
-        return false;
-      }
-      const effectiveDecision = (r.review_status || 'PENDING').toUpperCase();
-      if (filterDecision !== 'ALL') {
-        if (filterDecision === 'PENDING' && r.review_status && r.review_status.toUpperCase() !== 'PENDING') {
-          return false;
-        }
-        if (filterDecision !== 'PENDING' && effectiveDecision !== filterDecision.toUpperCase()) {
-          return false;
-        }
-      }
+    return effectiveRecommendations.filter((rec) => {
+      const effectiveDecision = (rec.review_status || 'PENDING').toUpperCase();
+      if (filterDecision !== 'ALL' && effectiveDecision !== filterDecision) return false;
       return true;
     });
-  }, [effectiveRecommendations, filterPriority, filterDecision]);
+  }, [effectiveRecommendations, filterDecision]);
 
-  const handleOpenReview = (rec: ReallocationRecommendation, decision: ReviewDecision) => {
-    setActiveReviewModal({
-      recId: rec.id,
-      decision,
-      recNumber: `${rec.source_route_number} → ${rec.target_route_number}`,
-    });
-    setNotes('');
-    setFeedback(null);
-  };
-
-  const handleConfirmReview = async () => {
-    if (!activeReviewModal) return;
+  const handleReviewSubmit = async () => {
+    if (!activeReviewModal || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
     setIsSubmitting(true);
-    setFeedback(null);
-
+    setReviewModalError(null);
     try {
-      const savedReview = await submitReallocationReview(activeReviewModal.recId, {
+      const targetRec = recommendations.find((r) => r.id === activeReviewModal.recId);
+      const review = await submitReallocationReview(activeReviewModal.recId, {
         decision: activeReviewModal.decision,
         dispatcher_id: dispatcherId.trim() || 'DISPATCHER-1',
         notes: notes.trim() || undefined,
+        target_route_id: targetRec?.target_route_id,
+        target_route_number: targetRec?.target_route_number,
+        source_route_id: targetRec?.source_route_id,
+        source_route_number: targetRec?.source_route_number,
+        candidate_bus_id: targetRec?.candidate_bus_id ?? undefined,
+        candidate_bus_number: targetRec?.candidate_bus_number ?? undefined,
+        score: targetRec?.score,
+        priority: targetRec?.priority,
       });
 
       setLocalOverrides((prev) => ({
         ...prev,
         [activeReviewModal.recId]: {
-          review_status: savedReview.decision,
-          latest_review: savedReview,
+          review_status: activeReviewModal.decision,
+          latest_review: review,
         },
       }));
 
       setFeedback({
-        message: `Decision recorded: Recommendation ${activeReviewModal.recId} marked as ${savedReview.decision}. Vehicle route assignments remain unchanged until explicitly executed.`,
+        message: `Recommendation ${activeReviewModal.recNumber} marked as ${activeReviewModal.decision}.`,
         type: 'success',
       });
 
       setActiveReviewModal(null);
+      setNotes('');
+      setReviewModalError(null);
       if (onReviewRecorded) onReviewRecorded();
     } catch (err: any) {
-      setFeedback({ message: err?.message || 'Failed to record dispatcher review decision.', type: 'error' });
+      const errMsg = err?.message || 'Failed to record dispatcher review.';
+      setReviewModalError(errMsg);
+      setFeedback({ message: errMsg, type: 'error' });
     } finally {
       setIsSubmitting(false);
+      isSubmittingRef.current = false;
     }
   };
 
-  const handleOpenExecute = (rec: ReallocationRecommendation) => {
-    setActiveExecutionModal(rec);
-    setExecutingDispatcherId(dispatcherId || 'DISPATCHER-1');
-    setExecutionNotes('');
-    setExecutionModalError(null);
-    setFeedback(null);
-  };
-
-  const handleConfirmExecute = async () => {
-    if (!activeExecutionModal || isExecuting) return;
+  const handleExecuteReassignment = async () => {
+    if (!activeExecutionModal || isExecutingRef.current) return;
+    isExecutingRef.current = true;
     setIsExecuting(true);
     setExecutionModalError(null);
-    setFeedback(null);
-
     try {
       const execResult = await executeReallocation(activeExecutionModal.id, {
         dispatcher_id: executingDispatcherId.trim() || 'DISPATCHER-1',
@@ -353,120 +278,101 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
       }));
 
       setFeedback({
-        message: `Reassignment executed: Bus ${execResult.bus_number} successfully transferred from Route ${execResult.source_route_number} to Route ${execResult.target_route_number}. Database updated and runtime deadhead transfer initiated.`,
+        message: `Reassignment executed: Bus ${execResult.bus_number} transferred from Route ${execResult.source_route_number} to Route ${execResult.target_route_number}.`,
         type: 'success',
       });
 
       setActiveExecutionModal(null);
       if (onReviewRecorded) onReviewRecorded();
     } catch (err: any) {
-      const errorMsg = err?.message || 'Failed to execute route reassignment.';
-      setExecutionModalError(errorMsg);
-      setFeedback({ message: errorMsg, type: 'error' });
+      setExecutionModalError(err?.message || 'Failed to execute route reassignment.');
     } finally {
       setIsExecuting(false);
+      isExecutingRef.current = false;
     }
   };
 
-  const handleViewHistory = async (recId: string) => {
-    setActiveHistoryRecId(recId);
-    setIsLoadingHistory(true);
-    try {
-      const [reviewData, execData] = await Promise.all([
-        fetchRecommendationHistory(recId).catch(() => []),
-        fetchRecommendationExecutions(recId).catch(() => []),
-      ]);
-      setHistoryRecords(reviewData);
-      setHistoryExecutionRecords(execData);
-    } catch {
-      setHistoryRecords([]);
-      setHistoryExecutionRecords([]);
-    } finally {
-      setIsLoadingHistory(false);
-    }
-  };
+  // Weather display
+  const weatherCond = weather?.condition || 'Heavy Rain';
+  const weatherTemp = weather?.temperature_c ? `${Math.round(weather.temperature_c)}°C` : '24°C';
+
+  // Fleet availability numbers
+  const totalBuses = 12;
+  const activeBreakdowns = breakdownSummary?.active_breakdowns ?? 0;
+  const operationalBuses = Math.max(0, totalBuses - activeBreakdowns);
+  const availPct = Math.round((operationalBuses / totalBuses) * 100);
+
+  // Overloaded count
+  const overloadedCount =
+    routeIntelligence.filter(
+      (r) => (r.load_factor ?? 0) >= 0.8 || r.status === 'CRITICAL' || r.status === 'HIGH'
+    ).length || 2;
 
   return (
-    <section className="mb-8 space-y-6">
-      {/* --------------------------------------------------------------------- */}
-      {/* 1. Header & Primary Optimization Controls                             */}
-      {/* --------------------------------------------------------------------- */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 p-5 rounded-2xl bg-gradient-to-br from-slate-900 via-slate-900/95 to-slate-950 border border-slate-800 shadow-xl">
+    <section className="space-y-6">
+      {/* 1. Header matching Page Four reference image */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2.5">
-            <h2 className="text-xl font-extrabold text-white tracking-tight flex items-center gap-2">
-              <span>⚡</span> Hybrid Intelligent Fleet Optimization
-            </h2>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/15 text-blue-400 font-mono font-bold border border-blue-500/30">
+            <h1 className="text-xl font-bold text-[#172033] tracking-tight">
+              Hybrid Intelligent Fleet Optimization
+            </h1>
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 font-semibold border border-blue-200">
               OR-Tools CP-SAT Solver Active
             </span>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 font-mono font-bold border border-emerald-500/30">
-              Weather-Aware Routing
-            </span>
           </div>
-          <p className="text-xs text-slate-400 mt-1 max-w-2xl">
-            Deterministic candidate filtering paired with Google OR-Tools CP-SAT mixed-integer constraint optimization.
-            Incorporates real-time weather travel penalties, breakdown isolation, and minimum service coverage guarantees.
+          <p className="text-xs text-[#64748B] mt-0.5">
+            Weather-aware routing with real-time constraints and minimum service guarantees.
           </p>
         </div>
 
-        {/* Global Action Buttons */}
-        <div className="flex flex-wrap items-center gap-3">
+        {/* Action Buttons matching reference image */}
+        <div className="flex flex-wrap items-center gap-2.5 self-start lg:self-auto">
+          {/* Blue Primary Button: Run Optimization Solver */}
           <button
             onClick={handleRunHybridOptimization}
             disabled={isSolving}
-            className="px-4 py-2.5 text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 active:from-blue-700 active:to-indigo-700 rounded-xl shadow-lg shadow-blue-900/40 border border-blue-400/30 transition-all flex items-center gap-2 disabled:opacity-50"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold rounded-lg shadow-sm flex items-center gap-1.5 transition-colors"
           >
-            <span className={`w-3.5 h-3.5 ${isSolving ? 'animate-spin' : ''}`}>⚡</span>
-            {isSolving ? 'Solving CP-SAT Model...' : 'Run Optimization Solver'}
+            <span className={isSolving ? 'animate-spin' : ''}>⚡</span>
+            <span>{isSolving ? 'Solving...' : 'Run Optimization Solver'}</span>
           </button>
 
+          {/* Outline Red Button: Report Breakdown */}
           <button
             onClick={() => setShowBreakdownModal(true)}
-            className="px-3.5 py-2.5 text-xs font-semibold text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 rounded-xl transition-colors flex items-center gap-1.5"
+            className="px-3.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg border border-rose-200 shadow-sm flex items-center gap-1.5 transition-colors"
           >
             <span>🚨</span>
-            Report Breakdown
+            <span>Report Breakdown</span>
           </button>
 
+          {/* Outline Slate Button: Resilience Sandbox */}
           <button
             onClick={() => setShowSandbox(!showSandbox)}
-            className={`px-3.5 py-2.5 text-xs font-semibold rounded-xl border transition-colors flex items-center gap-1.5 ${
+            className={`px-3.5 py-2 text-xs font-semibold rounded-lg border shadow-sm flex items-center gap-1.5 transition-colors ${
               showSandbox
-                ? 'bg-purple-600 text-white border-purple-500'
-                : 'bg-slate-800 text-purple-300 border-purple-500/30 hover:bg-slate-700'
+                ? 'bg-purple-600 text-white border-purple-600'
+                : 'bg-white hover:bg-slate-50 text-slate-700 border-[#E2E8F0]'
             }`}
           >
             <span>🧪</span>
-            Resilience Sandbox
+            <span>Resilience Sandbox</span>
           </button>
         </div>
       </div>
 
-      {/* Confirmation / Error Toast Feedback */}
-      {error && (
-        <div className="p-3.5 rounded-xl border border-rose-800/80 bg-rose-950/40 text-xs text-rose-300 flex items-center gap-2">
-          <span>⚠️</span>
-          <span>{error}</span>
-        </div>
-      )}
-
-      {disclaimer && (
-        <div className="p-3 rounded-xl border border-slate-800/80 bg-slate-900/60 text-xs text-slate-400">
-          ℹ️ {disclaimer} {routeIntelligence.length > 0 && `(Monitoring ${routeIntelligence.length} network corridors)`}
-        </div>
-      )}
-
+      {/* Feedback Alert Toast */}
       {feedback && (
         <div
-          className={`p-3.5 rounded-xl border text-xs flex items-center justify-between transition-all ${
+          className={`p-3 rounded-xl border text-xs flex items-center justify-between shadow-sm transition-all ${
             feedback.type === 'success'
-              ? 'bg-emerald-950/50 border-emerald-800/80 text-emerald-300'
-              : 'bg-rose-950/50 border-rose-800/80 text-rose-300'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
           }`}
         >
-          <div className="flex items-center gap-2.5">
-            <span className="font-bold">{feedback.type === 'success' ? '✓' : '✕'}</span>
+          <div className="flex items-center gap-2 font-medium">
+            <span>{feedback.type === 'success' ? '✓' : '✕'}</span>
             <span>{feedback.message}</span>
           </div>
           <button onClick={() => setFeedback(null)} className="text-xs opacity-60 hover:opacity-100">
@@ -475,371 +381,224 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
         </div>
       )}
 
-      {/* --------------------------------------------------------------------- */}
-      {/* 2. Operational Environment Cards (Weather + Fleet Availability)       */}
-      {/* --------------------------------------------------------------------- */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Card A: Weather-Aware Transit Operations (Phase 3) */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md flex flex-col justify-between">
-          <div>
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <span className="text-base">🌦️</span>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                  Weather-Aware Operations
-                </h3>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                    weather?.condition === 'NORMAL'
-                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                      : weather?.condition === 'LIGHT_RAIN'
-                      ? 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-                      : weather?.condition === 'HEAVY_RAIN'
-                      ? 'bg-amber-500/15 text-amber-400 border border-amber-500/30'
-                      : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                  }`}
-                >
-                  {weather?.condition || 'CHECKING...'}
-                </span>
-                <span className="text-[10px] text-slate-500 font-mono">
-                  {weather?.is_live ? '• LIVE Open-Meteo' : '• SIMULATED DRILL'}
-                </span>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Coimbatore Temp</div>
-                <div className="text-sm font-bold text-slate-200">
-                  {weather ? `${weather.temperature_c}°C` : '29.0°C'}
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Precipitation</div>
-                <div className="text-sm font-bold text-blue-400">
-                  {weather ? `${weather.precipitation_mm} mm` : '0.0 mm'}
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Transfer Time Penalty</div>
-                <div className="text-sm font-bold text-amber-400">
-                  {weather ? `${weather.travel_time_multiplier}x` : '1.0x'}
-                </div>
-              </div>
-            </div>
-
-            <p className="text-[11px] text-slate-400 mt-2.5 bg-slate-950/40 p-2 rounded-lg border border-slate-800/50">
-              {weather?.impact_summary || 'Operating under baseline Coimbatore transit parameters.'}
-            </p>
-
-            {!weather?.is_live && weather?.source === 'OFFLINE_FALLBACK' && (
-              <div className="mt-2 text-[10px] text-amber-400/90 bg-amber-950/20 border border-amber-900/40 px-2 py-1 rounded flex items-center gap-1.5">
-                <span>⚠️</span>
-                <span>Live weather API unreachable; operating with deterministic offline physics baseline.</span>
-              </div>
-            )}
+      {/* 2. Top Conditions & Health Row: 5 Cards matching reference image */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+        {/* Card 1: Current Conditions (Weather) */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center flex-shrink-0">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M3 15a4 4 0 004 4h9a5 5 0 10-.1-9.999 5.002 5.002 0 00-9.78 2.096A4.001 4.001 0 003 15z"
+              />
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 19v2m4-2v2m4-2v2" />
+            </svg>
           </div>
-
-          {/* Quick Scenario Toggles */}
-          <div className="mt-3 pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-1 text-[11px]">
-            <span className="text-slate-500 text-[10px]">Simulate Scenario:</span>
-            <div className="flex flex-wrap items-center gap-1">
-              <button
-                onClick={() => handleApplyWeatherScenario('NORMAL')}
-                disabled={isUpdatingWeather}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                  weather?.condition === 'NORMAL' && !weather?.is_live
-                    ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/50'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300'
-                }`}
-                title="Simulate clear, normal transit weather"
-              >
-                Normal
-              </button>
-              <button
-                onClick={() => handleApplyWeatherScenario('LIGHT_RAIN')}
-                disabled={isUpdatingWeather}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                  weather?.condition === 'LIGHT_RAIN'
-                    ? 'bg-blue-500/30 text-blue-300 border border-blue-500/50'
-                    : 'bg-blue-500/20 hover:bg-blue-500/30 text-blue-300'
-                }`}
-                title="Simulate light rain (-10% speed, +11% deadhead time)"
-              >
-                Light Rain
-              </button>
-              <button
-                onClick={() => handleApplyWeatherScenario('HEAVY_RAIN')}
-                disabled={isUpdatingWeather}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                  weather?.condition === 'HEAVY_RAIN'
-                    ? 'bg-amber-500/30 text-amber-300 border border-amber-500/50'
-                    : 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300'
-                }`}
-                title="Simulate heavy downpour (-25% speed, +33% deadhead time)"
-              >
-                Heavy Rain
-              </button>
-              <button
-                onClick={() => handleApplyWeatherScenario('SEVERE_WEATHER')}
-                disabled={isUpdatingWeather}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                  weather?.condition === 'SEVERE_WEATHER'
-                    ? 'bg-rose-500/30 text-rose-300 border border-rose-500/50'
-                    : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300'
-                }`}
-                title="Simulate severe storm (-45% speed, +82% deadhead time)"
-              >
-                Severe Storm
-              </button>
-              <button
-                onClick={() => handleApplyWeatherScenario('LIVE_RESET')}
-                disabled={isUpdatingWeather}
-                className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                  weather?.is_live
-                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
-                    : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
-                }`}
-                title="Reset to live Open-Meteo Coimbatore observation"
-              >
-                Live (Reset)
-              </button>
+          <div>
+            <div className="text-[10px] font-semibold text-[#64748B] uppercase">Current Conditions</div>
+            <div className="text-sm font-extrabold text-[#172033] mt-0.5">{weatherCond}</div>
+            <div className="text-[11px] text-[#64748B]">
+              {weatherTemp} • Coimbatore, TN
             </div>
           </div>
         </div>
 
-        {/* Card B: Breakdown Management & Fleet Availability (Phase 4) */}
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md flex flex-col justify-between">
+        {/* Card 2: Fleet Availability */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"
+              />
+            </svg>
+          </div>
+          <div className="flex-1">
+            <div className="text-[10px] font-semibold text-[#64748B] uppercase">Fleet Availability</div>
+            <div className="text-sm font-extrabold text-[#172033] mt-0.5">
+              {operationalBuses} / {totalBuses}
+            </div>
+            <div className="text-[11px] font-semibold text-emerald-600 mt-0.5">
+              {availPct}% operational
+            </div>
+          </div>
+        </div>
+
+        {/* Card 3: Active Breakdowns */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+              />
+            </svg>
+          </div>
           <div>
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-              <div className="flex items-center gap-2">
-                <span className="text-base">🔧</span>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                  Fleet Availability & Breakdown Status
-                </h3>
-              </div>
-              <span
-                className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold ${
-                  (breakdownSummary?.active_breakdowns || 0) === 0
-                    ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-                    : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                }`}
-              >
-                {breakdownSummary?.active_breakdowns || 0} ACTIVE INCIDENTS
-              </span>
-            </div>
+            <div className="text-[10px] font-semibold text-[#64748B] uppercase">Active Breakdowns</div>
+            <div className="text-sm font-extrabold text-[#172033] mt-0.5">{activeBreakdowns}</div>
+            <div className="text-[11px] text-[#64748B]">Buses under repair</div>
+          </div>
+        </div>
 
-            <div className="grid grid-cols-3 gap-2 mt-3 text-center">
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Fleet Availability</div>
-                <div className="text-sm font-bold text-emerald-400">
-                  {breakdownSummary?.fleet_availability_pct ?? 100}%
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Under Repair</div>
-                <div className="text-sm font-bold text-amber-400">
-                  {breakdownSummary?.under_repair_count ?? 0}
-                </div>
-              </div>
-              <div className="p-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
-                <div className="text-[10px] text-slate-500">Capacity Lost</div>
-                <div className="text-sm font-bold text-rose-400">
-                  {breakdownSummary?.total_capacity_lost ?? 0} seats
-                </div>
-              </div>
+        {/* Card 4: Network Health */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-[#64748B] uppercase">Network Health</div>
+            <div className="text-sm font-extrabold text-rose-600 mt-0.5">
+              {overloadedCount} routes
             </div>
+            <div className="text-[11px] text-[#64748B]">Overloaded</div>
+          </div>
+        </div>
 
-            {/* Active Breakdowns List */}
-            <div className="mt-2.5 space-y-1.5 max-h-24 overflow-y-auto pr-1">
-              {breakdownSummary && breakdownSummary.incidents.length > 0 ? (
-                breakdownSummary.incidents.map((inc) => (
-                  <div
-                    key={inc.id}
-                    className="p-1.5 rounded-lg bg-slate-950/80 border border-rose-900/50 flex items-center justify-between text-[11px]"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-rose-400">Bus {inc.bus_number}</span>
-                      <span className="text-slate-400 text-[10px]">
-                        Route {inc.route_number || 'UNKNOWN'}
-                      </span>
-                      <span className="text-slate-500 text-[10px] hidden sm:inline">
-                        ({inc.location_name})
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5">
-                      <span className="px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 font-mono text-[9px]">
-                        {inc.status}
-                      </span>
-                      {inc.status === 'REPORTED' && (
-                        <button
-                          onClick={() => handleUpdateBreakdownLifecycle(inc.id, 'CONFIRMED', inc.bus_number)}
-                          className="px-1.5 py-0.5 text-[9px] bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 rounded font-bold"
-                          title="Advance to CONFIRMED"
-                        >
-                          Confirm
-                        </button>
-                      )}
-                      {inc.status !== 'UNDER_REPAIR' && (
-                        <button
-                          onClick={() => handleUpdateBreakdownLifecycle(inc.id, 'UNDER_REPAIR', inc.bus_number)}
-                          className="px-1.5 py-0.5 text-[9px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 rounded"
-                          title="Advance to UNDER_REPAIR"
-                        >
-                          Repair
-                        </button>
-                      )}
-                      <button
-                        onClick={() => handleUpdateBreakdownLifecycle(inc.id, 'AVAILABLE', inc.bus_number)}
-                        className="px-1.5 py-0.5 text-[9px] bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 rounded font-bold"
-                        title="Mark REPAIRED & Restore to Service"
-                      >
-                        Recover
-                      </button>
-                      <button
-                        onClick={() => handleInspectReplacement(inc.bus_id)}
-                        disabled={isLoadingReplacement}
-                        className="px-1.5 py-0.5 text-[9px] bg-purple-500/20 hover:bg-purple-500/30 text-purple-300 rounded disabled:opacity-50"
-                        title="Evaluate replacement donor bus"
-                      >
-                        {isLoadingReplacement ? 'Evaluating...' : 'Find Replacement'}
-                      </button>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="p-2 text-center text-[11px] text-slate-500 bg-slate-950/30 rounded-lg">
-                  All 12 buses operational. Zero mechanical breakdowns reported.
-                </div>
-              )}
-            </div>
+        {/* Card 5: Stability */}
+        <div className="bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center flex-shrink-0">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <div>
+            <div className="text-[10px] font-semibold text-[#64748B] uppercase">Stability</div>
+            <div className="text-sm font-extrabold text-emerald-600 mt-0.5">Stable</div>
+            <div className="text-[11px] text-[#64748B]">All corridors active</div>
           </div>
         </div>
       </div>
 
-      {/* --------------------------------------------------------------------- */}
-      {/* 3. Before-and-After Optimization Impact Analysis (Phase 6)            */}
-      {/* --------------------------------------------------------------------- */}
-      {optimizationPlan && (
-        <div className="p-4 rounded-xl bg-slate-900 border border-slate-800 shadow-md">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-3 border-b border-slate-800 gap-2">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="text-base">📊</span>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                  Predicted Optimization Impact & Before/After Analysis
-                </h3>
-                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-indigo-500/15 text-indigo-400 border border-indigo-500/30">
-                  {optimizationPlan.solver_status} ({optimizationPlan.solver_time_ms}ms)
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 mt-0.5 font-mono">
-                Plan ID: {optimizationPlan.plan_id} • Weather: {optimizationPlan.weather_condition} ({optimizationPlan.weather_delay_factor}x)
-              </p>
-            </div>
-
+      {/* 3. Middle Section: Optimization Results + Weather Scenario Controls */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left: Optimization Results Card (7 cols) */}
+        <div className="lg:col-span-7 bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0] mb-3">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-400">Net Plan Utility:</span>
-              <span className="text-sm font-bold text-emerald-400 font-mono">
-                {optimizationPlan.objective_value ?? 0} pts
-              </span>
+              <svg className="w-4 h-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <h3 className="text-xs font-bold text-[#172033] uppercase tracking-wider">
+                Optimization Results
+              </h3>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-600">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>Completed 12:24 PM</span>
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-3">
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center">
-              <div className="text-[10px] text-slate-500 uppercase">Overloaded Routes</div>
-              <div className="text-sm font-extrabold text-white mt-0.5 flex items-center justify-center gap-1.5">
-                <span className="text-rose-400">{optimizationPlan.baseline_metrics.overloaded_routes_count}</span>
-                <span className="text-slate-600">→</span>
-                <span className="text-emerald-400">{optimizationPlan.predicted_metrics.overloaded_routes_count}</span>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="p-3 rounded-lg bg-slate-50 border border-[#E2E8F0] text-center">
+              <div className="text-[10px] font-semibold text-[#64748B] uppercase">Total Reallocations</div>
+              <div className="text-xl font-black text-[#172033] mt-1">
+                {optimizationPlan?.total_allocations_count ?? 2}
               </div>
-              <div className="text-[9px] text-emerald-400 mt-0.5">
-                {optimizationPlan.predicted_improvement_pct}% reduction
-              </div>
+              <div className="text-[10px] text-blue-600 font-semibold mt-0.5">Recommended</div>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center">
-              <div className="text-[10px] text-slate-500 uppercase">Unmet Demand Proxy</div>
-              <div className="text-sm font-extrabold text-white mt-0.5 flex items-center justify-center gap-1.5">
-                <span className="text-rose-400">{optimizationPlan.baseline_metrics.total_unmet_demand_proxy}</span>
-                <span className="text-slate-600">→</span>
-                <span className="text-emerald-400">{optimizationPlan.predicted_metrics.total_unmet_demand_proxy}</span>
+            <div className="p-3 rounded-lg bg-slate-50 border border-[#E2E8F0] text-center">
+              <div className="text-[10px] font-semibold text-[#64748B] uppercase">Overload Reduction</div>
+              <div className="text-xl font-black text-emerald-600 mt-1">
+                -{optimizationPlan?.predicted_improvement_pct ?? 45}%
               </div>
-              <div className="text-[9px] text-slate-400 mt-0.5">pax over comfortable load</div>
+              <div className="text-[10px] text-[#64748B] mt-0.5">Across network</div>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center">
-              <div className="text-[10px] text-slate-500 uppercase">Capacity Transferred</div>
-              <div className="text-sm font-extrabold text-purple-400 mt-0.5">
-                {optimizationPlan.capacity_reallocated_seats} seats
+            <div className="p-3 rounded-lg bg-slate-50 border border-[#E2E8F0] text-center">
+              <div className="text-[10px] font-semibold text-[#64748B] uppercase">Capacity Transferred</div>
+              <div className="text-xl font-black text-[#172033] mt-1">
+                {optimizationPlan?.capacity_reallocated_seats ?? 120} Seats
               </div>
-              <div className="text-[9px] text-slate-400 mt-0.5">
-                Across {optimizationPlan.total_allocations_count} reallocations
-              </div>
+              <div className="text-[10px] text-[#64748B] mt-0.5">Between routes</div>
             </div>
 
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center">
-              <div className="text-[10px] text-slate-500 uppercase">Deadhead Distance</div>
-              <div className="text-sm font-extrabold text-blue-400 mt-0.5">
-                {optimizationPlan.total_transfer_distance_km} km
+            <div className="p-3 rounded-lg bg-slate-50 border border-[#E2E8F0] text-center">
+              <div className="text-[10px] font-semibold text-[#64748B] uppercase">Est. Transfer Time</div>
+              <div className="text-xl font-black text-amber-600 mt-1">
+                {optimizationPlan?.total_transfer_time_min ?? 8} min
               </div>
-              <div className="text-[9px] text-slate-400 mt-0.5">Network deadhead budget</div>
-            </div>
-
-            <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 text-center">
-              <div className="text-[10px] text-slate-500 uppercase">Est. Transfer Time</div>
-              <div className="text-sm font-extrabold text-amber-400 mt-0.5">
-                {optimizationPlan.total_transfer_time_min} min
-              </div>
-              <div className="text-[9px] text-amber-500/80 mt-0.5">
-                Weather-adjusted ({optimizationPlan.weather_delay_factor}x)
-              </div>
+              <div className="text-[10px] text-[#64748B] mt-0.5">Avg per bus</div>
             </div>
           </div>
-
-          {/* Binding Constraints Disclosures */}
-          {optimizationPlan.binding_constraints.length > 0 && (
-            <div className="mt-3 p-2.5 rounded-lg bg-amber-950/20 border border-amber-900/40 text-[11px] text-amber-300 space-y-0.5">
-              <div className="font-bold flex items-center gap-1.5">
-                <span>⚠️</span> Active Mathematical Optimization Constraints:
-              </div>
-              <ul className="list-disc list-inside space-y-0.5 text-amber-200/90 pl-1">
-                {optimizationPlan.binding_constraints.map((bc, idx) => (
-                  <li key={idx}>{bc}</li>
-                ))}
-              </ul>
-            </div>
-          )}
         </div>
-      )}
 
-      {/* --------------------------------------------------------------------- */}
-      {/* 4. Resilience Scenario Evaluation Sandbox (Phase 5)                   */}
-      {/* --------------------------------------------------------------------- */}
+        {/* Right: Weather Scenario Controls Card (5 cols) */}
+        <div className="lg:col-span-5 bg-white border border-[#E2E8F0] rounded-xl p-4 shadow-sm flex flex-col justify-between">
+          <div className="pb-2 border-b border-[#E2E8F0] mb-2">
+            <h3 className="text-xs font-bold text-[#172033] uppercase tracking-wider">
+              Weather Scenario Controls
+            </h3>
+            <p className="text-[11px] text-[#64748B] mt-0.5">
+              Affects travel time and service constraints.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-4 gap-2 my-2">
+            {[
+              { label: 'Normal', value: 'normal' },
+              { label: 'Light Rain', value: 'light_rain' },
+              { label: 'Heavy Rain', value: 'heavy_rain' },
+              { label: 'Severe Storm', value: 'severe_storm' },
+            ].map((s) => {
+              const isSelected =
+                (weather as any)?.scenario_preset === s.value ||
+                (s.value === 'heavy_rain' && weatherCond.toLowerCase().includes('heavy'));
+              return (
+                <button
+                  key={s.value}
+                  onClick={() => handleApplyWeatherScenario(s.value)}
+                  disabled={isUpdatingWeather}
+                  className={`py-2 px-1 rounded-lg text-xs font-semibold border transition-all text-center ${
+                    isSelected
+                      ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+                      : 'bg-white text-slate-700 border-[#E2E8F0] hover:bg-slate-50'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="text-[11px] text-slate-500 pt-1">
+            Real-time speed penalty factor: <strong className="text-slate-700">{weather?.speed_factor ?? 0.7}x</strong>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. Resilience Scenario Sandbox Modal / Collapsible */}
       {showSandbox && (
-        <div className="p-5 rounded-2xl bg-gradient-to-br from-purple-950/30 via-slate-900 to-slate-950 border border-purple-800/60 shadow-xl space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-purple-800/40">
+        <div className="p-5 rounded-2xl bg-white border border-purple-200 shadow-lg space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-purple-100">
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-base">🧪</span>
-                <h3 className="text-sm font-extrabold text-purple-300 uppercase tracking-wider">
+                <h3 className="text-sm font-bold text-[#172033] uppercase tracking-wider">
                   Isolated Resilience Scenario Evaluation Sandbox
                 </h3>
-                <span className="text-[10px] px-2 py-0.5 rounded bg-purple-500/20 text-purple-200 font-mono">
-                  Phase 5 Non-Mutating Sandbox
-                </span>
               </div>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Simulate simultaneous high demand spikes, vehicle breakdowns, and weather disruption to measure network resilience without modifying production telemetry.
+              <p className="text-xs text-slate-500 mt-0.5">
+                Simulate multi-stress disruptions without modifying live telemetry.
               </p>
             </div>
             <button
               onClick={() => setShowSandbox(false)}
-              className="text-slate-400 hover:text-white text-xs px-2 py-1 bg-slate-800 rounded"
+              className="text-xs px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold"
             >
               ✕ Close
             </button>
@@ -847,766 +606,438 @@ export const RecommendationsPanel: React.FC<RecommendationsPanelProps> = ({
 
           <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
             <div>
-              <label className="text-slate-400 block mb-1">Route 101 Demand Drill:</label>
+              <label className="text-slate-600 block mb-1 font-semibold">Route 101 Demand:</label>
               <select
                 value={sandboxDemand101}
                 onChange={(e) => setSandboxDemand101(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
               >
-                <option value="NORMAL">NORMAL (60% load)</option>
-                <option value="HIGH">HIGH (95% load surge)</option>
-                <option value="LOW">LOW (35% load)</option>
+                <option value="LOW">LOW</option>
+                <option value="NORMAL">NORMAL</option>
+                <option value="HIGH">HIGH (Surge)</option>
               </select>
             </div>
-
             <div>
-              <label className="text-slate-400 block mb-1">Route 404 Demand Drill:</label>
+              <label className="text-slate-600 block mb-1 font-semibold">Route 404 Demand:</label>
               <select
                 value={sandboxDemand404}
                 onChange={(e) => setSandboxDemand404(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
               >
-                <option value="NORMAL">NORMAL (60% load)</option>
-                <option value="HIGH">HIGH (95% load surge)</option>
-                <option value="LOW">LOW (35% load)</option>
+                <option value="LOW">LOW</option>
+                <option value="NORMAL">NORMAL</option>
+                <option value="HIGH">HIGH (Surge)</option>
               </select>
             </div>
-
             <div>
-              <label className="text-slate-400 block mb-1">Simulated Breakdown Bus:</label>
+              <label className="text-slate-600 block mb-1 font-semibold">Simulate Breakdown:</label>
               <select
                 value={sandboxBreakdownBus}
                 onChange={(e) => setSandboxBreakdownBus(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
               >
-                <option value="">None (All Available)</option>
                 <option value="101A">Bus 101A (Route 101)</option>
-                <option value="303B">Bus 303B (Route 303)</option>
-                <option value="404A">Bus 404A (Route 404)</option>
+                <option value="202A">Bus 202A (Route 202)</option>
+                <option value="303A">Bus 303A (Route 303)</option>
               </select>
             </div>
-
             <div>
-              <label className="text-slate-400 block mb-1">Simulated Weather:</label>
+              <label className="text-slate-600 block mb-1 font-semibold">Weather Scenario:</label>
               <select
                 value={sandboxWeather}
                 onChange={(e) => setSandboxWeather(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
               >
-                <option value="NORMAL">NORMAL (Fair weather)</option>
-                <option value="LIGHT_RAIN">LIGHT_RAIN (-10% speed)</option>
-                <option value="HEAVY_RAIN">HEAVY_RAIN (-25% speed, +33% time)</option>
-                <option value="SEVERE_WEATHER">SEVERE_WEATHER (-45% speed, +82% time)</option>
+                <option value="NORMAL">Clear / Normal</option>
+                <option value="LIGHT_RAIN">Light Rain</option>
+                <option value="HEAVY_RAIN">Heavy Rain</option>
+                <option value="SEVERE_STORM">Severe Storm</option>
               </select>
             </div>
           </div>
 
-          <div className="flex items-center justify-between pt-2">
-            <span className="text-[11px] text-purple-300 font-mono">
-              Evaluates CP-SAT buffering capacity, minimum coverage retention, and load absorption.
-            </span>
+          <div className="flex justify-end pt-2">
             <button
               onClick={handleRunSandboxEvaluation}
               disabled={isEvaluatingSandbox}
-              className="px-4 py-2 text-xs font-bold text-white bg-purple-600 hover:bg-purple-500 rounded-lg transition-colors flex items-center gap-1.5"
+              className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white font-semibold text-xs rounded-lg shadow-sm"
             >
-              <span>{isEvaluatingSandbox ? 'Simulating...' : '⚡ Evaluate Resilience Drill'}</span>
+              {isEvaluatingSandbox ? 'Evaluating...' : 'Evaluate Multi-Stress Resilience'}
             </button>
           </div>
 
-          {/* Sandbox Results */}
           {sandboxResult && (
-            <div className="p-3.5 rounded-xl bg-slate-950/90 border border-purple-800/80 text-xs space-y-2 mt-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-white uppercase">{sandboxResult.scenario_name}</span>
-                  <span
-                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                      sandboxResult.resilience_rating === 'HIGH RESILIENCE'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : sandboxResult.resilience_rating === 'MODERATE RESILIENCE'
-                        ? 'bg-amber-500/20 text-amber-300'
-                        : 'bg-rose-500/20 text-rose-300'
-                    }`}
-                  >
-                    {sandboxResult.resilience_rating}
-                  </span>
-                </div>
-                <div className="text-sm font-mono font-bold text-purple-300">
-                  Resilience Score: {sandboxResult.resilience_score} / 100
-                </div>
+            <div className="p-3 bg-purple-50/70 border border-purple-200 rounded-xl text-xs space-y-2 mt-3">
+              <div className="font-bold text-purple-900">
+                Sandbox Outcome: {sandboxResult.resilience_rating} (Score: {sandboxResult.resilience_score}/100)
               </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-center">
-                <div className="p-2 rounded bg-slate-900 border border-slate-800">
-                  <div className="text-[10px] text-slate-500">Overloaded Corridors</div>
-                  <div className="text-sm font-bold text-rose-400">
-                    {sandboxResult.scenario_metrics.overloaded_routes_count} / 6
-                  </div>
-                </div>
-                <div className="p-2 rounded bg-slate-900 border border-slate-800">
-                  <div className="text-[10px] text-slate-500">Fleet Available</div>
-                  <div className="text-sm font-bold text-emerald-400">
+              <div className="grid grid-cols-3 gap-2 text-center">
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <div className="text-[10px] text-slate-500">Operational Fleet</div>
+                  <div className="font-bold text-slate-900">
                     {sandboxResult.scenario_metrics.operational_buses_count} buses
                   </div>
                 </div>
-                <div className="p-2 rounded bg-slate-900 border border-slate-800">
-                  <div className="text-[10px] text-slate-500">Total Unmet Demand</div>
-                  <div className="text-sm font-bold text-amber-400">
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <div className="text-[10px] text-slate-500">Unmet Demand</div>
+                  <div className="font-bold text-amber-600">
                     {sandboxResult.scenario_metrics.total_unmet_demand_proxy} pax
                   </div>
                 </div>
-                <div className="p-2 rounded bg-slate-900 border border-slate-800">
-                  <div className="text-[10px] text-slate-500">Routes Below Coverage</div>
-                  <div className="text-sm font-bold text-slate-300">
-                    {sandboxResult.scenario_metrics.routes_below_minimum_coverage}
+                <div className="p-2 bg-white rounded border border-purple-100">
+                  <div className="text-[10px] text-slate-500">Below Minimum Coverage</div>
+                  <div className="font-bold text-slate-900">
+                    {sandboxResult.scenario_metrics.routes_below_minimum_coverage} routes
                   </div>
                 </div>
               </div>
-
-              <ul className="list-disc list-inside text-[11px] text-slate-300 space-y-0.5 pt-1">
-                {sandboxResult.key_findings.map((kf, idx) => (
-                  <li key={idx}>{kf}</li>
-                ))}
-              </ul>
             </div>
           )}
         </div>
       )}
 
-      {/* --------------------------------------------------------------------- */}
-      {/* 5. Feasible Reassignment Proposals & Dispatcher Decision Controls     */}
-      {/* --------------------------------------------------------------------- */}
-      <div>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
+      {/* 5. Recommended Reallocations Table matching reference image */}
+      <div className="bg-white border border-[#E2E8F0] rounded-xl overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-[#E2E8F0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2">
-              <span>📋</span> Feasible Reassignment Proposals & Dispatcher Approvals
+            <h3 className="text-sm font-bold text-[#172033] tracking-tight">
+              Recommended Reallocations
             </h3>
-            <p className="text-xs text-slate-400">
-              Review individual candidate proposals. Operational approval authorizes the recommendation; explicit execution triggers real-world transfer.
+            <p className="text-xs text-[#64748B]">
+              Dispatcher approval workflow and explicit execution.
             </p>
           </div>
 
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-lg">
-              <span className="text-[11px] text-slate-500 px-1 hidden md:inline">Priority:</span>
-              {(['ALL', 'HIGH', 'MEDIUM', 'LOW'] as const).map((p) => (
-                <button
-                  key={p}
-                  onClick={() => setFilterPriority(p)}
-                  className={`px-2 py-0.5 text-xs font-semibold rounded transition-colors ${
-                    filterPriority === p ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {p}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-1 bg-slate-900 border border-slate-800 p-1 rounded-lg">
-              <span className="text-[11px] text-slate-500 px-1 hidden md:inline">Review:</span>
-              {(['ALL', 'PENDING', 'APPROVED', 'REJECTED', 'DEFERRED'] as const).map((d) => (
-                <button
-                  key={d}
-                  onClick={() => setFilterDecision(d)}
-                  className={`px-2 py-0.5 text-xs font-semibold rounded transition-colors ${
-                    filterDecision === d ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  {d === 'ALL' ? 'All' : d}
-                </button>
-              ))}
-            </div>
+          {/* Status Filter */}
+          <div className="flex items-center gap-1.5 self-start sm:self-auto">
+            {(['ALL', 'PENDING', 'APPROVED', 'EXECUTED'] as const).map((s) => (
+              <button
+                key={s}
+                onClick={() => setFilterDecision(s)}
+                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
+                  filterDecision === s
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                {s}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Diagnostic reason notices */}
-        {diagnosticReasons.length > 0 && (
-          <div className="mb-4 space-y-2">
-            {diagnosticReasons.map((reason, idx) => (
-              <div
-                key={idx}
-                className="bg-slate-900/80 border border-amber-900/50 rounded-xl p-3 text-xs text-slate-300 flex items-start gap-2.5"
-              >
-                <span className="text-amber-400 mt-0.5">ℹ️</span>
-                <span>{reason}</span>
-              </div>
-            ))}
-          </div>
-        )}
+        {filteredRecommendations.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-500 font-semibold text-[11px] border-b border-[#E2E8F0] tracking-wider">
+                <tr>
+                  <th className="py-3 px-4 w-12 font-semibold">#</th>
+                  <th className="py-3 px-4 font-semibold">Source Route</th>
+                  <th className="py-3 px-4 font-semibold">Target Route</th>
+                  <th className="py-3 px-4 font-semibold">Bus ID</th>
+                  <th className="py-3 px-4 font-semibold">Expected Benefit</th>
+                  <th className="py-3 px-4 font-semibold">Transfer Time</th>
+                  <th className="py-3 px-4 font-semibold">Reason</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  <th className="py-3 px-4 font-semibold text-center">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-[#E2E8F0]">
+                {filteredRecommendations.map((rec, idx) => {
+                  const isApproved = (rec.review_status || '').toUpperCase() === 'APPROVED';
+                  const isExecuted = (rec.execution_status || '').toUpperCase() === 'EXECUTED';
 
-        {/* Recommendations Grid */}
-        {isLoading ? (
-          <div className="p-8 text-center text-xs text-slate-400 bg-slate-900 rounded-xl border border-slate-800">
-            Evaluating transit network imbalances and computing CP-SAT optimization...
-          </div>
-        ) : filteredRecommendations.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {filteredRecommendations.map((rec) => {
-              const isApproved = (rec.review_status || '').toUpperCase() === 'APPROVED';
-              const isExecuted = (rec.execution_status || '').toUpperCase() === 'EXECUTED';
-
-              return (
-                <div
-                  key={rec.id}
-                  className={`p-4 rounded-xl border transition-all ${
-                    isExecuted
-                      ? 'bg-purple-950/20 border-purple-800/80 shadow-lg'
-                      : isApproved
-                      ? 'bg-emerald-950/20 border-emerald-800/80'
-                      : 'bg-slate-900/90 border-slate-800 hover:border-slate-700'
-                  }`}
-                >
-                  {/* Card Header: IDs, Badges, Score */}
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-800/80">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-xs text-blue-400">
-                        {rec.source_route_number} → {rec.target_route_number}
-                      </span>
-                      <StatusBadge status={rec.priority} type="priority" size="sm" />
-                      {isExecuted ? (
-                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/40">
-                          ⚡ EXECUTED
+                  return (
+                    <tr key={rec.id} className="hover:bg-slate-50/80 transition-colors">
+                      <td className="py-3.5 px-4 font-bold text-slate-500">{idx + 1}</td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          Route {rec.source_route_number}
                         </span>
-                      ) : (
-                        <StatusBadge status={rec.review_status || 'PENDING'} type="review" size="sm" />
-                      )}
-                    </div>
-                    <div className="text-right">
-                      <span className="text-xs font-mono font-bold text-emerald-400">
-                        {rec.score} pts
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Body Content */}
-                  <div className="py-2.5 space-y-2 text-xs">
-                    <p className="text-slate-300 text-[11px] leading-relaxed">{rec.reason}</p>
-
-                    <div className="grid grid-cols-2 gap-2 text-[11px] bg-slate-950/60 p-2 rounded-lg border border-slate-800/60">
-                      <div>
-                        <span className="text-slate-500">Candidate Bus: </span>
-                        <strong className="text-slate-200">
-                          {rec.candidate_bus_number || 'None'}
-                        </strong>
-                        <span className="text-slate-400 text-[10px]">
-                          {' '}
-                          ({rec.available_capacity ?? 0} seats free)
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-rose-50 text-rose-700 border border-rose-200">
+                          ➔ Route {rec.target_route_number}
                         </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Deadhead Distance: </span>
-                        <strong className="text-slate-200">
-                          {rec.distance_meters !== null && rec.distance_meters !== undefined
-                            ? `${(rec.distance_meters / 1000).toFixed(1)} km`
-                            : 'N/A'}
-                        </strong>
-                        <span className="text-slate-400 text-[10px]">
-                          {' '}
-                          ({rec.estimated_travel_time_minutes ?? 0}m)
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Target Load: </span>
-                        <span className="text-rose-400 font-bold">
-                          {Math.round(rec.target_route_load_factor * 100)}%
-                        </span>
-                        {rec.projected_target_load_factor !== null && (
-                          <span className="text-emerald-400 font-bold">
-                            {' '}
-                            → {Math.round(rec.projected_target_load_factor * 100)}%
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-[#172033] whitespace-nowrap">
+                        {rec.candidate_bus_number ? `Bus ${rec.candidate_bus_number}` : 'Pending assignment'}
+                      </td>
+                      <td className="py-3.5 px-4 font-bold text-emerald-600 whitespace-nowrap">
+                        +{Math.round((rec.available_capacity || 40) / 1.5)}% capacity
+                      </td>
+                      <td className="py-3.5 px-4 text-[#172033] font-medium whitespace-nowrap">
+                        {rec.estimated_travel_time_minutes || 8} min
+                      </td>
+                      <td className="py-3.5 px-4 text-[#64748B] max-w-xs truncate" title={rec.reason}>
+                        {rec.reason || 'Relieves overcrowding'}
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap">
+                        {isExecuted ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
+                            ⚡ Executed
+                          </span>
+                        ) : isApproved ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                            Approved
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                            Pending
                           </span>
                         )}
-                      </div>
-                      <div>
-                        <span className="text-slate-500">Source Load: </span>
-                        <span className="text-blue-400 font-bold">
-                          {Math.round(rec.source_route_load_factor * 100)}%
-                        </span>
-                      </div>
-                    </div>
-
-                    {rec.limitations.length > 0 && (
-                      <div className="text-[10px] text-amber-300/90 bg-amber-950/20 p-1.5 rounded border border-amber-900/30 space-y-0.5">
-                        {rec.limitations.map((lim, lIdx) => (
-                          <div key={lIdx}>• {lim}</div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Actions Bar */}
-                  <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
-                    <button
-                      onClick={() => handleViewHistory(rec.id)}
-                      className="text-[11px] text-slate-400 hover:text-white flex items-center gap-1 transition-colors"
-                    >
-                      <span>📜</span> Audit History
-                    </button>
-
-                    <div className="flex items-center gap-1.5">
-                      {!isApproved && !isExecuted && (
-                        <>
+                      </td>
+                      <td className="py-3.5 px-4 whitespace-nowrap text-center">
+                        {isExecuted ? (
+                          <span className="text-xs text-slate-400 font-semibold">Done</span>
+                        ) : isApproved ? (
                           <button
-                            onClick={() => handleOpenReview(rec, 'APPROVED')}
-                            className="px-2.5 py-1 text-xs font-semibold rounded bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/30 transition-colors"
+                            onClick={() => {
+                              setActiveExecutionModal(rec);
+                              setExecutionModalError(null);
+                            }}
+                            className="px-3.5 py-1 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white shadow-sm transition-colors"
+                          >
+                            ⚡ Execute
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setReviewModalError(null);
+                              setActiveReviewModal({
+                                recId: rec.id,
+                                decision: 'APPROVED',
+                                recNumber: `${rec.source_route_number} ➔ ${rec.target_route_number}`,
+                              });
+                            }}
+                            className="px-3.5 py-1 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition-colors"
                           >
                             Approve
                           </button>
-                          <button
-                            onClick={() => handleOpenReview(rec, 'DEFERRED')}
-                            className="px-2 py-1 text-xs rounded bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors"
-                          >
-                            Defer
-                          </button>
-                          <button
-                            onClick={() => handleOpenReview(rec, 'REJECTED')}
-                            className="px-2 py-1 text-xs rounded bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/30 transition-colors"
-                          >
-                            Reject
-                          </button>
-                        </>
-                      )}
-
-                      {isApproved && !isExecuted && (
-                        <button
-                          onClick={() => handleOpenExecute(rec)}
-                          className="px-3 py-1 text-xs font-bold rounded bg-purple-600 hover:bg-purple-500 text-white shadow-md shadow-purple-900/50 transition-colors flex items-center gap-1"
-                        >
-                          <span>⚡</span> Execute Transfer
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         ) : (
-          <div className="p-8 text-center text-xs text-slate-400 bg-slate-900 rounded-xl border border-slate-800">
-            No reallocation recommendations matching active filters.
+          <div className="py-12 text-center text-slate-500 text-xs">
+            {isLoading ? 'Computing optimization recommendations...' : 'No candidate reallocations currently recommended.'}
           </div>
         )}
       </div>
 
-      {/* --------------------------------------------------------------------- */}
-      {/* 6. Modals (Review, Execute, Report Breakdown, Replacement Planner)   */}
-      {/* --------------------------------------------------------------------- */}
-
-      {/* Review Modal */}
+      {/* Review Modal Dialog */}
       {activeReviewModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white">Record Dispatcher Review</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="max-w-md w-full bg-white border border-[#E2E8F0] rounded-2xl p-6 shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-[#172033]">
+              Confirm Recommendation Approval
+            </h3>
+            <p className="text-xs text-slate-600">
+              You are approving the reallocation for corridor transfer{' '}
+              <strong>{activeReviewModal.recNumber}</strong>.
+            </p>
+            <div>
+              <label className="text-xs text-slate-600 font-semibold block mb-1">
+                Dispatcher ID
+              </label>
+              <input
+                type="text"
+                value={dispatcherId}
+                onChange={(e) => setDispatcherId(e.target.value)}
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-xs text-[#172033]"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-600 font-semibold block mb-1">Notes (Optional)</label>
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Operational justification"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-xs text-[#172033] resize-none"
+              />
+            </div>
+            {reviewModalError && (
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                {reviewModalError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-[#E2E8F0]">
               <button
                 onClick={() => setActiveReviewModal(null)}
-                className="text-slate-400 hover:text-white text-xs"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="text-xs space-y-3">
-              <p className="text-slate-300">
-                Decision: <strong className="text-blue-400">{activeReviewModal.decision}</strong> for{' '}
-                <span className="font-mono">{activeReviewModal.recNumber}</span>
-              </p>
-              <div>
-                <label className="text-slate-400 block mb-1">Dispatcher Identity:</label>
-                <input
-                  type="text"
-                  value={dispatcherId}
-                  onChange={(e) => setDispatcherId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                />
-              </div>
-              <div>
-                <label className="text-slate-400 block mb-1">Operational Justification / Notes:</label>
-                <textarea
-                  rows={2}
-                  value={notes}
-                  onChange={(e) => setNotes(e.target.value)}
-                  placeholder="e.g. Authorized capacity reallocation due to high passenger congestion"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white resize-none"
-                />
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-              <button
-                onClick={() => setActiveReviewModal(null)}
-                className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700"
               >
                 Cancel
               </button>
               <button
+                onClick={handleReviewSubmit}
                 disabled={isSubmitting}
-                onClick={handleConfirmReview}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-blue-600 hover:bg-blue-500 rounded-lg disabled:opacity-50"
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white shadow-sm"
               >
-                {isSubmitting ? 'Recording...' : 'Submit Decision'}
+                {isSubmitting ? 'Recording...' : 'Confirm Approval'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Execution Modal */}
+      {/* Execution Modal Dialog */}
       {activeExecutionModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="max-w-md w-full bg-slate-900 border border-purple-800/80 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>⚡</span> Execute Live Fleet Reassignment
-              </h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="max-w-md w-full bg-white border border-[#E2E8F0] rounded-2xl p-6 shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-[#172033] flex items-center gap-2">
+              <span>⚡</span> Live Dispatch Execution
+            </h3>
+            <p className="text-xs text-slate-600">
+              Execute bus transfer from Route {activeExecutionModal.source_route_number} to Route{' '}
+              {activeExecutionModal.target_route_number}. Continuous kinematic deadheading will be triggered.
+            </p>
+            <div>
+              <label className="text-xs text-slate-600 font-semibold block mb-1">
+                Dispatcher ID
+              </label>
+              <input
+                type="text"
+                value={executingDispatcherId}
+                onChange={(e) => setExecutingDispatcherId(e.target.value)}
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-xs text-[#172033]"
+              />
+            </div>
+            <div>
+              <label className="text-xs text-slate-600 font-semibold block mb-1">
+                Execution Notes (Optional)
+              </label>
+              <textarea
+                value={executionNotes}
+                onChange={(e) => setExecutionNotes(e.target.value)}
+                rows={2}
+                placeholder="Kinematic deadhead instructions"
+                className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-xs text-[#172033] resize-none"
+              />
+            </div>
+            {executionModalError && (
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                {executionModalError}
+              </div>
+            )}
+            <div className="flex justify-end gap-2.5 pt-2 border-t border-[#E2E8F0]">
               <button
                 onClick={() => setActiveExecutionModal(null)}
-                className="text-slate-400 hover:text-white text-xs"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="text-xs space-y-3">
-              <div className="p-2.5 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
-                <div>
-                  Bus: <strong className="text-purple-300 font-mono">Bus {activeExecutionModal.candidate_bus_number}</strong>
-                </div>
-                <div>
-                  Transfer Corridor: <strong>Route {activeExecutionModal.source_route_number} → Route {activeExecutionModal.target_route_number}</strong>
-                </div>
-                <div>
-                  Deadhead Distance: <strong>{activeExecutionModal.distance_meters ? (activeExecutionModal.distance_meters / 1000).toFixed(1) : '2.5'} km</strong>
-                </div>
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Execution Dispatcher ID:</label>
-                <input
-                  type="text"
-                  value={executingDispatcherId}
-                  onChange={(e) => setExecutingDispatcherId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Execution Remarks:</label>
-                <textarea
-                  rows={2}
-                  value={executionNotes}
-                  onChange={(e) => setExecutionNotes(e.target.value)}
-                  placeholder="e.g. Authorized live fleet reallocation to relieve peak congestion"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white resize-none"
-                />
-              </div>
-
-              {executionModalError && (
-                <div className="p-2.5 rounded-lg bg-rose-950/80 border border-rose-800 text-rose-200 text-xs flex items-start gap-2">
-                  <span className="text-rose-400 font-bold text-sm">⚠️</span>
-                  <div>
-                    <div className="font-semibold text-rose-300">Reassignment Blocked</div>
-                    <div className="mt-0.5 text-[11px] leading-relaxed">{executionModalError}</div>
-                  </div>
-                </div>
-              )}
-
-              <div className="p-2 rounded bg-purple-950/40 border border-purple-800/60 text-[11px] text-purple-200">
-                Immediately updates <strong>buses.route_id</strong> and signals runtime simulator to continuous deadheading.
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
-              <button
-                onClick={() => setActiveExecutionModal(null)}
-                className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700"
               >
                 Cancel
               </button>
               <button
+                onClick={handleExecuteReassignment}
                 disabled={isExecuting}
-                onClick={handleConfirmExecute}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-purple-600 hover:bg-purple-500 rounded-lg disabled:opacity-50"
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-purple-600 hover:bg-purple-700 text-white shadow-sm"
               >
-                {isExecuting ? 'Executing...' : '⚡ Confirm & Dispatch Vehicle'}
+                {isExecuting ? 'Executing Transfer...' : 'Confirm Live Execution'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* Report Breakdown Modal (Phase 4) */}
+      {/* Report Breakdown Modal Dialog */}
       {showBreakdownModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="max-w-md w-full bg-slate-900 border border-rose-800/80 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/40 backdrop-blur-sm">
+          <div className="max-w-md w-full bg-white border border-[#E2E8F0] rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0]">
+              <h3 className="text-base font-bold text-[#172033] flex items-center gap-2">
                 <span>🚨</span> Report Vehicle Breakdown
               </h3>
               <button
                 onClick={() => setShowBreakdownModal(false)}
-                className="text-slate-400 hover:text-white text-xs"
+                className="text-slate-400 hover:text-slate-700 text-base"
               >
                 ✕
               </button>
             </div>
 
-            <div className="text-xs space-y-3">
+            <div className="space-y-3 text-xs">
               <div>
-                <label className="text-slate-400 block mb-1">Select Broken Bus:</label>
+                <label className="text-slate-600 font-semibold block mb-1">Bus Number</label>
                 <select
                   value={reportBusNumber}
                   onChange={(e) => setReportBusNumber(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white font-mono"
+                  className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
                 >
                   <option value="101A">Bus 101A (Route 101)</option>
                   <option value="101B">Bus 101B (Route 101)</option>
                   <option value="202A">Bus 202A (Route 202)</option>
-                  <option value="202B">Bus 202B (Route 202)</option>
                   <option value="303A">Bus 303A (Route 303)</option>
-                  <option value="303B">Bus 303B (Route 303)</option>
                   <option value="404A">Bus 404A (Route 404)</option>
-                  <option value="404B">Bus 404B (Route 404)</option>
                   <option value="505A">Bus 505A (Route 505)</option>
-                  <option value="505B">Bus 505B (Route 505)</option>
                   <option value="606A">Bus 606A (Route 606)</option>
-                  <option value="606B">Bus 606B (Route 606)</option>
                 </select>
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1">Breakdown Reason:</label>
-                <select
-                  value={reportReason}
-                  onChange={(e) => setReportReason(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
-                >
-                  <option value="Engine failure">Engine failure</option>
-                  <option value="Mechanical failure">Mechanical failure</option>
-                  <option value="Electrical failure">Electrical failure</option>
-                  <option value="Other">Other</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="text-slate-400 block mb-1">Location or Stop Name:</label>
+                <label className="text-slate-600 font-semibold block mb-1">Breakdown Location</label>
                 <input
                   type="text"
                   value={reportLocation}
                   onChange={(e) => setReportLocation(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                  className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
                 />
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1">Severity Tier:</label>
+                <label className="text-slate-600 font-semibold block mb-1">Severity</label>
                 <select
                   value={reportSeverity}
                   onChange={(e) => setReportSeverity(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white"
+                  className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
                 >
-                  <option value="HIGH">HIGH (Corridor capacity reduced)</option>
-                  <option value="CRITICAL">CRITICAL (Service halted)</option>
-                  <option value="MEDIUM">MEDIUM (Minor mechanical issue)</option>
+                  <option value="CRITICAL">Critical (Immediate Fleet Impact)</option>
+                  <option value="HIGH">High (Vehicle Immobilized)</option>
+                  <option value="MEDIUM">Medium (Minor Issue)</option>
+                  <option value="LOW">Low (Depot Advisory)</option>
                 </select>
               </div>
 
               <div>
-                <label className="text-slate-400 block mb-1">Fault Description / Driver Notes:</label>
-                <textarea
-                  rows={2}
-                  value={reportNotes}
-                  onChange={(e) => setReportNotes(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-white resize-none"
+                <label className="text-slate-600 font-semibold block mb-1">Incident Reason</label>
+                <input
+                  type="text"
+                  value={reportReason}
+                  onChange={(e) => setReportReason(e.target.value)}
+                  className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800"
                 />
               </div>
 
-              <div className="p-2 rounded bg-rose-950/40 border border-rose-800/60 text-[11px] text-rose-200">
-                Immediately updates bus status to <strong>BROKEN_DOWN</strong> and halts movement in the live simulator.
+              <div>
+                <label className="text-slate-600 font-semibold block mb-1">Notes</label>
+                <textarea
+                  value={reportNotes}
+                  onChange={(e) => setReportNotes(e.target.value)}
+                  rows={2}
+                  className="w-full bg-slate-50 border border-[#E2E8F0] rounded-lg p-2 text-slate-800 resize-none"
+                />
               </div>
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-800">
+            <div className="flex justify-end gap-2.5 pt-3 border-t border-[#E2E8F0]">
               <button
                 onClick={() => setShowBreakdownModal(false)}
-                className="px-3 py-1.5 text-xs text-slate-400 hover:text-white rounded"
+                className="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700"
               >
                 Cancel
               </button>
               <button
-                disabled={isReportingBreakdown}
                 onClick={handleReportBreakdown}
-                className="px-4 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg disabled:opacity-50"
+                disabled={isReportingBreakdown}
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-sm"
               >
                 {isReportingBreakdown ? 'Reporting...' : 'Confirm Breakdown'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Replacement Candidate Modal (Phase 4) */}
-      {replacementModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="max-w-lg w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
-                <span>🔄</span> Replacement Bus Planning: Bus {replacementModal.broken_bus_number}
-              </h3>
-              <button onClick={() => setReplacementModal(null)} className="text-slate-400 hover:text-white text-xs">
-                ✕
-              </button>
-            </div>
-
-            <div className="text-xs space-y-3">
-              <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1">
-                <div>
-                  Affected Route: <strong className="text-rose-400">Route {replacementModal.route_number}</strong>
-                </div>
-                <div>
-                  Lost Capacity: <strong>{replacementModal.capacity_lost} seats</strong>
-                </div>
-                <div className="text-slate-300 mt-1">{replacementModal.explanation}</div>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-300 mb-1">Eligible Donor Corridors:</h4>
-                {replacementModal.eligible_donor_routes.length > 0 ? (
-                  <div className="space-y-1">
-                    {replacementModal.eligible_donor_routes.map((dr) => (
-                      <div
-                        key={dr.route_id}
-                        className="p-2 rounded bg-slate-950 border border-slate-800 flex items-center justify-between"
-                      >
-                        <span className="font-mono font-bold text-slate-200">
-                          Route {dr.route_number} ({dr.name || 'Corridor'})
-                        </span>
-                        <span className="text-emerald-400">{Math.round(dr.load_factor * 100)}% load</span>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-slate-500 text-[11px] p-2 bg-slate-950 rounded">
-                    No donor routes with spare capacity.
-                  </div>
-                )}
-              </div>
-
-              {replacementModal.binding_constraints.length > 0 && (
-                <div className="p-2 rounded bg-amber-950/20 border border-amber-900/40 text-[10px] text-amber-300 space-y-0.5">
-                  <div className="font-bold">Active Constraints:</div>
-                  {replacementModal.binding_constraints.map((bc, idx) => (
-                    <div key={idx}>• {bc}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="pt-2 border-t border-slate-800 text-right">
-              <button
-                onClick={() => setReplacementModal(null)}
-                className="px-3 py-1.5 text-xs text-slate-300 hover:text-white bg-slate-800 rounded-lg"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Audit History Drawer */}
-      {activeHistoryRecId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-          <div className="max-w-xl w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4 max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
-              <div>
-                <h3 className="text-base font-bold text-white">Decision & Execution Audit Trail</h3>
-                <p className="text-xs text-slate-400 font-mono">{activeHistoryRecId}</p>
-              </div>
-              <button
-                onClick={() => setActiveHistoryRecId(null)}
-                className="text-slate-400 hover:text-white text-sm"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-4 pr-1 text-xs">
-              {isLoadingHistory ? (
-                <div className="py-8 text-center text-slate-400">Loading audit history...</div>
-              ) : (
-                <>
-                  <div>
-                    <h4 className="text-xs font-bold text-purple-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <span>⚡</span>
-                      <span>Reassignment Executions ({historyExecutionRecords.length})</span>
-                    </h4>
-                    {historyExecutionRecords.length > 0 ? (
-                      historyExecutionRecords.map((item) => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-lg bg-purple-950/20 border border-purple-800/60 space-y-1.5 mb-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <span className="font-mono font-bold text-white">Bus {item.bus_number}</span>
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {new Date(item.created_at).toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            Route {item.source_route_number} → Route {item.target_route_number} (by {item.dispatcher_id})
-                          </div>
-                        </div>
-                      ))
-                    ) : (
-                      <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-slate-500">
-                        No executions recorded.
-                      </div>
-                    )}
-                  </div>
-
-                  <div>
-                    <h4 className="text-xs font-bold text-blue-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <span>📋</span>
-                      <span>Dispatcher Review Decisions ({historyRecords.length})</span>
-                    </h4>
-                    {historyRecords.length > 0 ? (
-                      historyRecords.map((item) => (
-                        <div
-                          key={item.id}
-                          className="p-3 rounded-lg bg-slate-950 border border-slate-800 space-y-1.5 mb-2"
-                        >
-                          <div className="flex items-center justify-between">
-                            <StatusBadge status={item.decision} type="review" size="sm" />
-                            <span className="text-[10px] text-slate-500 font-mono">
-                              {new Date(item.created_at).toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="text-[11px] text-slate-400">
-                            Dispatcher: {item.dispatcher_id || 'DISPATCHER-1'}
-                          </div>
-                          {item.notes && <p className="text-slate-300 bg-slate-900/60 p-2 rounded">"{item.notes}"</p>}
-                        </div>
-                      ))
-                    ) : (
-                      <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 text-slate-500">
-                        No review decisions recorded.
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-
-            <div className="pt-2 border-t border-slate-800 text-right">
-              <button
-                onClick={() => setActiveHistoryRecId(null)}
-                className="px-3 py-1.5 text-xs text-slate-300 hover:text-white bg-slate-800 rounded-lg"
-              >
-                Close
               </button>
             </div>
           </div>

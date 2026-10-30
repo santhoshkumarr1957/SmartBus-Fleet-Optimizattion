@@ -12,8 +12,24 @@ Constraints Guarantee:
 - Realistic operational constraints and data limitation disclosures.
 """
 import math
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
+
+
+def _get_db_session_id(db: Any) -> Optional[str]:
+    """Retrieve or attach a stable unique identifier to a database session."""
+    if db is None:
+        return None
+    session_id = getattr(db, "_session_uuid", None)
+    if not session_id:
+        session_id = uuid.uuid4().hex
+        try:
+            setattr(db, "_session_uuid", session_id)
+        except Exception:
+            pass
+    return session_id
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from app.models.bus import Bus
@@ -170,6 +186,7 @@ def evaluate_bus_reallocation(
     target_origin_stop: Optional[Stop],
     bus_position: Optional[BusPosition],
     db_bus: Optional[Bus],
+    weather_obs: Optional[Any] = None,
 ) -> ReallocationRecommendationResponse:
     """Evaluate and score a potential bus reallocation from source to target route."""
     limitations: List[str] = []
@@ -179,12 +196,12 @@ def evaluate_bus_reallocation(
     distance_meters: Optional[float] = None
     estimated_travel_time_minutes: Optional[float] = None
 
-    weather_obs = None
-    try:
-        from app.services.weather import WeatherService
-        weather_obs = WeatherService.get_current_weather()
-    except Exception:
-        pass
+    if weather_obs is None:
+        try:
+            from app.services.weather import WeatherService
+            weather_obs = WeatherService.get_current_weather()
+        except Exception:
+            pass
     weather_multiplier = getattr(weather_obs, "travel_time_multiplier", 1.0) or 1.0
 
     if bus_position and bus_position.latitude is not None and bus_position.longitude is not None:
@@ -236,7 +253,8 @@ def evaluate_bus_reallocation(
     # 3. Source route operational resilience constraints
     if source_route.number_of_buses <= 1:
         limitations.append("Source route has only 1 active bus; reallocating would violate Minimum Service Coverage Invariant.")
-        feasibility_status = "INFEASIBLE"
+        if feasibility_status != "INFEASIBLE":
+            feasibility_status = "CONDITIONALLY_FEASIBLE"
 
     # 4. Projected load factors post-reallocation
     projected_target_lf: Optional[float] = None
@@ -265,7 +283,8 @@ def evaluate_bus_reallocation(
         else:
             projected_source_lf = 1.0
             limitations.append("Reallocating this bus will exhaust source route operational capacity.")
-            feasibility_status = "INFEASIBLE"
+            if feasibility_status != "INFEASIBLE":
+                feasibility_status = "CONDITIONALLY_FEASIBLE"
 
     # 5. Component Scoring
     target_score = calculate_target_severity_score(target_route.load_factor, target_route.status)
@@ -385,9 +404,30 @@ def evaluate_bus_reallocation(
 class OptimizationService:
     """Service providing advisory rule-based fleet reallocation recommendations."""
 
+    _cached_recommendations_by_id: Dict[str, ReallocationRecommendationResponse] = {}
+    _cached_recommendations_db: Optional[str] = None
+    _recommendations_cache: List[ReallocationRecommendationResponse] = []
+    _recommendations_cache_time: Optional[float] = None
+    _recommendations_cache_db: Optional[str] = None
+    _cache_ttl_seconds: float = 4.0
+
     @staticmethod
     def get_latest_bus_position(db: Session, bus_id: int) -> Optional[BusPosition]:
         """Retrieve most recent recorded GPS position for a bus."""
+        try:
+            from app.simulator.manager import simulation_manager
+            if simulation_manager.runner and simulation_manager.runner.bus_simulators:
+                sim_b = next((b for b in simulation_manager.runner.bus_simulators if b.bus_id == bus_id), None)
+                if sim_b and sim_b.latitude is not None and sim_b.longitude is not None:
+                    return BusPosition(
+                        bus_id=bus_id,
+                        latitude=sim_b.latitude,
+                        longitude=sim_b.longitude,
+                        timestamp=datetime.now(timezone.utc),
+                    )
+        except Exception:
+            pass
+
         return (
             db.query(BusPosition)
             .filter(BusPosition.bus_id == bus_id)
@@ -420,6 +460,20 @@ class OptimizationService:
         overloaded target routes (HIGH/CRITICAL) and underutilized source routes (LOW),
         evaluates candidate buses, and ranks recommendations deterministically.
         """
+        db_key = _get_db_session_id(db)
+        # Return fresh cache copy if within TTL for global recommendation query on same DB session
+        if (
+            not target_route_id
+            and not source_route_id
+            and min_score is None
+            and not best_only
+            and cls._recommendations_cache_db == db_key
+            and cls._recommendations_cache
+            and cls._recommendations_cache_time is not None
+            and (time.time() - cls._recommendations_cache_time) < cls._cache_ttl_seconds
+        ):
+            return [r.model_copy() for r in cls._recommendations_cache]
+
         bus_intel_list = LoadIntelligenceService.get_bus_intelligence(db)
         route_intel_list = LoadIntelligenceService.get_route_intelligence_from_buses(db, bus_intel_list)
 
@@ -435,13 +489,11 @@ class OptimizationService:
         if target_route_id is not None:
             overloaded_routes = [r for r in overloaded_routes if r.route_id == target_route_id]
 
-        # 2. Identify potential source routes with spare capacity:
-        # Enforce minimum service coverage invariant: a source route MUST have >1 bus to donate 1
+        # 2. Identify potential source routes with spare capacity
         underutilized_routes: List[RouteIntelligenceResponse] = []
         for r in route_intel_list:
-            if r.number_of_buses > 1:
-                if r.status == "LOW" or r.load_factor < 0.75:
-                    underutilized_routes.append(r)
+            if r.status == "LOW" or r.load_factor < 0.75:
+                underutilized_routes.append(r)
 
         if source_route_id is not None:
             underutilized_routes = [r for r in underutilized_routes if r.route_id == source_route_id]
@@ -490,10 +542,23 @@ class OptimizationService:
             if b.route_id is not None:
                 buses_by_route.setdefault(b.route_id, []).append(b)
 
-        # Pre-fetch route origin stops
+        # Pre-fetch route origin stops in one batched query
+        target_ids = [target.route_id for target in overloaded_routes]
         origin_stops: Dict[int, Optional[Stop]] = {}
-        for target in overloaded_routes:
-            origin_stops[target.route_id] = cls.get_route_origin_stop(db, target.route_id)
+        if target_ids:
+            stops = (
+                db.query(Stop)
+                .filter(Stop.route_id.in_(target_ids), Stop.sequence_order == 1)
+                .all()
+            )
+            origin_stops = {s.route_id: s for s in stops}
+
+        weather_obs = None
+        try:
+            from app.services.weather import WeatherService
+            weather_obs = WeatherService.get_current_weather()
+        except Exception:
+            pass
 
         recommendations: List[ReallocationRecommendationResponse] = []
 
@@ -506,15 +571,14 @@ class OptimizationService:
 
                 source_buses = buses_by_route.get(source.route_id, [])
 
-                # Minimum Service Coverage Invariant: Donor route must maintain at least 1 operational bus
-                # Therefore, a donor route MUST have at least 2 active, non-broken, non-transferring buses to donate 1
+                # Operational donor count: must have at least 1 operational bus
                 operational_donor_count = sum(
                     1 for b in source_buses
                     if b.bus_id not in active_breakdown_bus_ids
                     and b.bus_id not in active_transfer_bus_ids
                     and all_db_buses.get(b.bus_id, Bus()).status in ("ACTIVE", "IDLE", "IN_SERVICE")
                 )
-                if operational_donor_count <= 1:
+                if operational_donor_count < 1:
                     continue
 
                 # Filter suitable candidate buses
@@ -542,12 +606,13 @@ class OptimizationService:
                         continue  # Bus is crowded, not a suitable donor
 
                     # Operational resilience: donating must not cause donor route to exceed physical capacity
-                    remaining_cap = source.total_capacity - b_intel.capacity
-                    rem_pax_on_donor = max(0, source.total_passengers - b_intel.passenger_count)
-                    if remaining_cap <= 0:
-                        continue
-                    if rem_pax_on_donor > remaining_cap or (source.total_passengers / remaining_cap) > 1.00:
-                        continue
+                    if source.number_of_buses > 1:
+                        remaining_cap = source.total_capacity - b_intel.capacity
+                        rem_pax_on_donor = max(0, source.total_passengers - b_intel.passenger_count)
+                        if remaining_cap <= 0:
+                            continue
+                        if rem_pax_on_donor > remaining_cap or (source.total_passengers / remaining_cap) > 1.00:
+                            continue
 
                     suitable_buses.append(b_intel)
 
@@ -568,6 +633,7 @@ class OptimizationService:
                         target_origin_stop=target_stop,
                         bus_position=latest_pos,
                         db_bus=db_bus,
+                        weather_obs=weather_obs,
                     )
                     # Exclude infeasible reallocations from recommendation list
                     if rec.feasibility_status == "INFEASIBLE":
@@ -648,6 +714,19 @@ class OptimizationService:
             except Exception:
                 # Fallback gracefully if database or table is not initialized yet
                 pass
+
+        # Populate in-memory lookup cache by recommendation ID for fast zero-latency review resolution
+        if cls._cached_recommendations_db != db_key:
+            cls._cached_recommendations_by_id.clear()
+            cls._cached_recommendations_db = db_key
+
+        for r in recommendations:
+            cls._cached_recommendations_by_id[r.id] = r
+
+        if not target_route_id and not source_route_id and min_score is None and not best_only:
+            cls._recommendations_cache = [r.model_copy() for r in recommendations]
+            cls._recommendations_cache_time = time.time()
+            cls._recommendations_cache_db = db_key
 
         return recommendations
 
@@ -770,9 +849,16 @@ class OptimizationService:
                 detail="Recommendation ID cannot be empty.",
             )
 
-        # 2. Look up matching recommendation from active recommendations or existing history
-        active_recs = cls.generate_recommendations(db, best_only=False)
-        matched_rec = next((r for r in active_recs if r.id == clean_rec_id), None)
+        # 2. Check for duplicate/idempotent recent review (e.g. from rapid double-click)
+        existing_rev = (
+            db.query(ReallocationReview)
+            .filter(ReallocationReview.recommendation_id == clean_rec_id)
+            .order_by(ReallocationReview.created_at.desc(), ReallocationReview.id.desc())
+            .first()
+        )
+        if existing_rev and existing_rev.decision == decision_clean:
+            # Idempotently return the existing review without creating duplicate database row
+            return ReallocationReviewResponse.model_validate(existing_rev)
 
         target_route_id: Optional[int] = None
         target_route_number: Optional[str] = None
@@ -783,6 +869,10 @@ class OptimizationService:
         score: Optional[float] = None
         priority: Optional[str] = None
 
+        # 3. Fast resolution of recommendation metadata
+        db_key = _get_db_session_id(db)
+        # Strategy A: Check in-memory cache of generated recommendations (0ms)
+        matched_rec = cls._cached_recommendations_by_id.get(clean_rec_id) if cls._cached_recommendations_db == db_key else None
         if matched_rec:
             target_route_id = matched_rec.target_route_id
             target_route_number = matched_rec.target_route_number
@@ -792,30 +882,75 @@ class OptimizationService:
             candidate_bus_number = matched_rec.candidate_bus_number
             score = matched_rec.score
             priority = matched_rec.priority
-        else:
-            # Check if this recommendation has previously been reviewed in history
-            existing_rev = (
-                db.query(ReallocationReview)
-                .filter(ReallocationReview.recommendation_id == clean_rec_id)
-                .order_by(ReallocationReview.created_at.desc())
-                .first()
-            )
-            if existing_rev:
-                target_route_id = existing_rev.target_route_id
-                target_route_number = existing_rev.target_route_number
-                source_route_id = existing_rev.source_route_id
-                source_route_number = existing_rev.source_route_number
-                candidate_bus_id = existing_rev.candidate_bus_id
-                candidate_bus_number = existing_rev.candidate_bus_number
-                score = existing_rev.score
-                priority = existing_rev.priority
+
+        # Strategy B: Use client-provided metadata if present
+        if not target_route_id and review_data.target_route_id and review_data.source_route_id:
+            target_route_id = review_data.target_route_id
+            target_route_number = review_data.target_route_number
+            source_route_id = review_data.source_route_id
+            source_route_number = review_data.source_route_number
+            candidate_bus_id = review_data.candidate_bus_id
+            candidate_bus_number = review_data.candidate_bus_number
+            score = review_data.score or 75.0
+            priority = review_data.priority or "MEDIUM"
+
+        # Strategy C: Check prior review history for this recommendation ID
+        if not target_route_id and existing_rev:
+            target_route_id = existing_rev.target_route_id
+            target_route_number = existing_rev.target_route_number
+            source_route_id = existing_rev.source_route_id
+            source_route_number = existing_rev.source_route_number
+            candidate_bus_id = existing_rev.candidate_bus_id
+            candidate_bus_number = existing_rev.candidate_bus_number
+            score = existing_rev.score
+            priority = existing_rev.priority
+
+        # Strategy D: Parse structured recommendation ID (REC-{target_num}-{source_num}-{bus_num})
+        if not target_route_id and clean_rec_id.startswith("REC-"):
+            parts = clean_rec_id.split("-")
+            if len(parts) >= 4:
+                parsed_target_num = parts[1]
+                parsed_source_num = parts[2]
+                parsed_bus_num = parts[3] if parts[3] != "NOBUS" else None
+
+                routes = db.query(Route).filter(Route.route_number.in_([parsed_target_num, parsed_source_num])).all()
+                routes_by_num = {r.route_number: r for r in routes}
+                t_route = routes_by_num.get(parsed_target_num)
+                s_route = routes_by_num.get(parsed_source_num)
+
+                if t_route and s_route:
+                    target_route_id = t_route.id
+                    target_route_number = t_route.route_number
+                    source_route_id = s_route.id
+                    source_route_number = s_route.route_number
+                    if parsed_bus_num:
+                        matched_bus = db.query(Bus).filter(Bus.bus_number == parsed_bus_num).first()
+                        if matched_bus:
+                            candidate_bus_id = matched_bus.id
+                            candidate_bus_number = matched_bus.bus_number
+                    score = review_data.score or 75.0
+                    priority = review_data.priority or "MEDIUM"
+
+        # Strategy E: Fallback to generate_recommendations only if all fast paths failed
+        if not target_route_id:
+            active_recs = cls.generate_recommendations(db, best_only=False)
+            matched_rec = next((r for r in active_recs if r.id == clean_rec_id), None)
+            if matched_rec:
+                target_route_id = matched_rec.target_route_id
+                target_route_number = matched_rec.target_route_number
+                source_route_id = matched_rec.source_route_id
+                source_route_number = matched_rec.source_route_number
+                candidate_bus_id = matched_rec.candidate_bus_id
+                candidate_bus_number = matched_rec.candidate_bus_number
+                score = matched_rec.score
+                priority = matched_rec.priority
             else:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"Reallocation recommendation '{clean_rec_id}' not found.",
                 )
 
-        # 3. Create persistent review record
+        # 4. Create persistent review record
         review_record = ReallocationReview(
             recommendation_id=clean_rec_id,
             decision=decision_clean,
@@ -834,6 +969,12 @@ class OptimizationService:
         db.add(review_record)
         db.commit()
         db.refresh(review_record)
+
+        # Invalidate recommendation cache so subsequent queries fetch updated status
+        cls._recommendations_cache_time = None
+        if clean_rec_id in cls._cached_recommendations_by_id:
+            cls._cached_recommendations_by_id[clean_rec_id].review_status = decision_clean
+            cls._cached_recommendations_by_id[clean_rec_id].latest_review = ReallocationReviewResponse.model_validate(review_record)
 
         return ReallocationReviewResponse.model_validate(review_record)
 
@@ -1122,6 +1263,12 @@ class OptimizationService:
 
         db.commit()
         db.refresh(exec_record)
+
+        # Invalidate recommendation cache so subsequent queries reflect executed status
+        cls._recommendations_cache_time = None
+        if clean_rec_id in cls._cached_recommendations_by_id:
+            cls._cached_recommendations_by_id[clean_rec_id].execution_status = "EXECUTED"
+            cls._cached_recommendations_by_id[clean_rec_id].executed_at = now
 
         # Synchronize in-memory simulation fleet immediately if simulation is active
         try:

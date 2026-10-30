@@ -46,13 +46,33 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000
 
 async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const url = `${API_BASE_URL}${endpoint}`;
+  const isMutation =
+    options?.method && ['POST', 'PUT', 'DELETE', 'PATCH'].includes(options.method.toUpperCase());
+  const timeoutMs = isMutation ? 30000 : 20000;
+
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 12000);
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Request to ${endpoint} timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  if (options?.signal) {
+    if (options.signal.aborted) {
+      controller.abort(options.signal.reason);
+    } else {
+      options.signal.addEventListener(
+        'abort',
+        () => {
+          controller.abort(options.signal?.reason);
+        },
+        { once: true }
+      );
+    }
+  }
 
   try {
     const response = await fetch(url, {
       ...options,
-      signal: options?.signal || controller.signal,
+      signal: controller.signal,
       headers: {
         Accept: 'application/json',
         'Content-Type': options?.body ? 'application/json' : (undefined as any),
@@ -77,6 +97,17 @@ async function fetchJson<T>(endpoint: string, options?: RequestInit): Promise<T>
     }
 
     return (await response.json()) as T;
+  } catch (err: any) {
+    if (err?.name === 'AbortError' || controller.signal.aborted) {
+      const reasonMsg =
+        controller.signal.reason?.message ||
+        (typeof controller.signal.reason === 'string' ? controller.signal.reason : null);
+      throw new Error(
+        reasonMsg ||
+          `Transit server request to ${endpoint} timed out or was interrupted. Please verify backend connectivity and retry.`
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timeoutId);
   }

@@ -13,45 +13,45 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   size = 'md',
 }) => {
   const normalized = (status || '').toUpperCase().trim();
-  const sizeClasses = size === 'sm' ? 'px-2 py-0.5 text-xs' : 'px-2.5 py-1 text-xs font-semibold';
+  const sizeClasses = size === 'sm' ? 'px-2 py-0.5 text-[11px]' : 'px-2.5 py-1 text-xs font-semibold';
 
-  // Execution status styles (Stage 11)
+  // Execution status styles
   if (type === 'execution') {
     switch (normalized) {
       case 'EXECUTED':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-purple-500/15 text-purple-300 border border-purple-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-purple-50 text-purple-700 border border-purple-200 font-medium ${sizeClasses}`}
             title="Reassignment executed into live dispatch and simulator"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-purple-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-600"></span>
             ⚡ Executed
           </span>
         );
       case 'IN_PROGRESS':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-sky-500/15 text-sky-300 border border-sky-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-sky-50 text-sky-700 border border-sky-200 font-medium ${sizeClasses}`}
             title="Reassignment in progress"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-sky-500 animate-pulse"></span>
             Transferring
           </span>
         );
       case 'FAILED':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-medium ${sizeClasses}`}
             title="Reassignment execution failed"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
-            ✕ Execution Failed
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-600"></span>
+            ✕ Failed
           </span>
         );
       default:
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium ${sizeClasses}`}
           >
             Not Executed
           </span>
@@ -59,47 +59,47 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
     }
   }
 
-  // Dispatcher Review decision styles (Stage 7)
+  // Dispatcher Review decision styles
   if (type === 'review') {
     switch (normalized) {
       case 'APPROVED':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/40 ${sizeClasses}`}
-            title="Approved for operational consideration (Non-automated dispatch)"
+            className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium ${sizeClasses}`}
+            title="Approved for operational consideration"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
             ✓ Approved
           </span>
         );
       case 'REJECTED':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-medium ${sizeClasses}`}
             title="Recommendation rejected by transit dispatcher"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
             ✕ Rejected
           </span>
         );
       case 'DEFERRED':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium ${sizeClasses}`}
             title="Recommendation deferred for subsequent cycle re-evaluation"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
             ⏳ Deferred
           </span>
         );
       default:
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-slate-800 text-slate-400 border border-slate-700 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium ${sizeClasses}`}
             title="Awaiting dispatcher review decision"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-slate-500"></span>
-            Pending Review
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+            Pending
           </span>
         );
     }
@@ -111,47 +111,47 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'CRITICAL':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 text-rose-400 border border-rose-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-semibold tracking-wide ${sizeClasses}`}
             title="Load factor >= 1.00 (Over capacity)"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400 animate-pulse"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-600 animate-pulse"></span>
             CRITICAL
           </span>
         );
       case 'HIGH':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 text-amber-400 border border-amber-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-semibold tracking-wide ${sizeClasses}`}
             title="Load factor 0.80 - 1.00 (Near capacity)"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
             HIGH
           </span>
         );
       case 'NORMAL':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-semibold tracking-wide ${sizeClasses}`}
             title="Load factor 0.50 - 0.80 (Healthy load)"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
             NORMAL
           </span>
         );
       case 'LOW':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold tracking-wide ${sizeClasses}`}
             title="Load factor < 0.50 (Surplus capacity)"
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
             LOW
           </span>
         );
       default:
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-slate-700/40 text-slate-400 border border-slate-700 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium ${sizeClasses}`}
           >
             {normalized || 'UNKNOWN'}
           </span>
@@ -165,34 +165,34 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'HIGH':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-500/15 text-rose-300 border border-rose-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-rose-50 text-rose-700 border border-rose-200 font-medium ${sizeClasses}`}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-rose-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
             High Priority
           </span>
         );
       case 'MEDIUM':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 font-medium ${sizeClasses}`}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
             Medium Priority
           </span>
         );
       case 'LOW':
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-blue-500/15 text-blue-300 border border-blue-500/40 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 font-medium ${sizeClasses}`}
           >
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span>
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500"></span>
             Low Priority
           </span>
         );
       default:
         return (
           <span
-            className={`inline-flex items-center gap-1.5 rounded-full bg-slate-700/40 text-slate-400 border border-slate-700 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 font-medium ${sizeClasses}`}
           >
             {normalized || 'NORMAL'}
           </span>
@@ -206,7 +206,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'FEASIBLE':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium ${sizeClasses}`}
           >
             ✓ Feasible
           </span>
@@ -214,7 +214,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'CONDITIONALLY_FEASIBLE':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-amber-500/15 text-amber-300 border border-amber-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1 rounded-md bg-amber-50 text-amber-700 border border-amber-200 font-medium ${sizeClasses}`}
           >
             ⚠ Conditionally Feasible
           </span>
@@ -222,7 +222,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'LIMITED_DATA':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-slate-600/30 text-slate-300 border border-slate-600/50 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-medium ${sizeClasses}`}
           >
             ℹ Limited Data
           </span>
@@ -230,7 +230,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       case 'INFEASIBLE':
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-rose-500/15 text-rose-300 border border-rose-500/30 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-medium ${sizeClasses}`}
           >
             ✕ Infeasible
           </span>
@@ -238,7 +238,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
       default:
         return (
           <span
-            className={`inline-flex items-center gap-1 rounded-md bg-slate-700/40 text-slate-300 border border-slate-700 ${sizeClasses}`}
+            className={`inline-flex items-center gap-1 rounded-md bg-slate-100 text-slate-600 border border-slate-200 font-medium ${sizeClasses}`}
           >
             {normalized}
           </span>
@@ -249,7 +249,7 @@ export const StatusBadge: React.FC<StatusBadgeProps> = ({
   // Generic
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700 ${sizeClasses}`}
+      className={`inline-flex items-center gap-1 rounded-full bg-slate-100 text-slate-700 border border-slate-200 font-medium ${sizeClasses}`}
     >
       {normalized}
     </span>

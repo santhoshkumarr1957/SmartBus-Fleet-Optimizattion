@@ -35,10 +35,10 @@ if settings.DATABASE_URL:
         engine = create_engine(
             settings.DATABASE_URL,
             pool_pre_ping=True,
-            pool_size=20,
-            max_overflow=10,
-            pool_timeout=30,
-            pool_recycle=300,
+            pool_size=5,
+            max_overflow=2,
+            pool_timeout=15,
+            pool_recycle=120,
             connect_args=connect_args,
             future=True,
         )
@@ -85,6 +85,9 @@ def get_db() -> Generator[Session | None, None, None]:
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 

@@ -22,16 +22,16 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
 
   return (
     <div
-      className={`mx-auto max-w-7xl mb-6 p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-200 ${
+      className={`mx-auto w-full mb-6 p-4 rounded-xl border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 transition-all duration-200 shadow-sm ${
         isDegraded
-          ? 'bg-amber-950/40 border-amber-800/60 text-amber-200'
-          : 'bg-rose-950/40 border-rose-800/60 text-rose-200'
+          ? 'bg-amber-50 border-amber-200 text-amber-900'
+          : 'bg-rose-50 border-rose-200 text-rose-900'
       }`}
     >
       <div className="flex items-start gap-3">
         <div
-          className={`p-2 rounded-lg ${
-            isDegraded ? 'bg-amber-500/20 text-amber-400' : 'bg-rose-500/20 text-rose-400'
+          className={`p-2 rounded-lg flex-shrink-0 ${
+            isDegraded ? 'bg-amber-100 text-amber-600' : 'bg-rose-100 text-rose-600'
           }`}
         >
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -47,7 +47,7 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
           <h4 className="text-sm font-semibold tracking-wide">
             {isDegraded ? 'Telemetry Partially Degraded' : 'Transit Backend Disconnected'}
           </h4>
-          <p className="text-xs text-slate-300 mt-0.5 max-w-2xl">
+          <p className="text-xs text-slate-600 mt-0.5 max-w-2xl">
             {errorMessage ||
               (isDegraded
                 ? 'Some transit API endpoints did not return data. Retaining latest available snapshot.'
@@ -59,10 +59,10 @@ export const ErrorBanner: React.FC<ErrorBannerProps> = ({
       <button
         onClick={onRetry}
         disabled={isRetrying}
-        className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors whitespace-nowrap ${
+        className={`px-3 py-1.5 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors whitespace-nowrap shadow-sm ${
           isDegraded
-            ? 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30'
-            : 'bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30'
+            ? 'bg-amber-600 hover:bg-amber-700 text-white'
+            : 'bg-rose-600 hover:bg-rose-700 text-white'
         }`}
       >
         <svg

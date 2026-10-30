@@ -54,7 +54,7 @@ def classify_load_factor(load_factor: float) -> str:
 def calculate_load_factor(passenger_count: int, capacity: int) -> float:
     """Safely compute load factor, handling zero or invalid capacity."""
     if capacity <= 0:
-        return 1.0 if passenger_count > 0 else 0.0
+        return 0.0
     bounded_passengers = max(0, passenger_count)
     return round(bounded_passengers / capacity, 4)
 
@@ -115,7 +115,9 @@ def detect_reallocation_opportunities(
     capacity (LOW). Only routes with active buses can provide spare capacity.
     """
     overloaded = [r for r in routes if r.status in ("HIGH", "CRITICAL")]
-    underutilized = [r for r in routes if r.status == "LOW" and r.number_of_buses > 1]
+    underutilized = [
+        r for r in routes if r.status == "LOW" and (r.number_of_buses or 0) > 0
+    ]
 
     # Prioritize CRITICAL over HIGH, then highest load factor descending
     severity_order = {"CRITICAL": 0, "HIGH": 1}

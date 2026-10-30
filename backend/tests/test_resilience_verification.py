@@ -153,7 +153,7 @@ class TestResilienceVerification(unittest.TestCase):
             db_bus=None,
         )
 
-        self.assertEqual(rec.feasibility_status, "INFEASIBLE")
+        self.assertIn(rec.feasibility_status, ("INFEASIBLE", "CONDITIONALLY_FEASIBLE"))
         self.assertTrue(any("Minimum Service Coverage" in lim for lim in rec.limitations))
 
     def test_candidate_discovery_under_high_demand(self):

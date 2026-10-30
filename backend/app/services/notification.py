@@ -79,7 +79,12 @@ class NotificationService:
     @classmethod
     def get_summary(cls, db: Session) -> NotificationSummaryResponse:
         """Compute aggregate counts of notifications grouped by status, severity, and source."""
-        all_alerts = db.query(Notification).all()
+        try:
+            all_alerts = db.query(Notification).all()
+        except Exception as exc:
+            from app.db.session import sanitize_db_error
+            logger.error(f"[NOTIFICATION] Database error in get_summary: {sanitize_db_error(str(exc))}")
+            raise
 
         total = len(all_alerts)
         active_count = sum(1 for a in all_alerts if a.status == "ACTIVE")
